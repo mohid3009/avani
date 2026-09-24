@@ -30,11 +30,11 @@ export default function Building3DView() {
   return (
     <div className="max-w-[1080px]">
       <Breadcrumb current="3D Building View" />
-      <button onClick={() => window.history.back()} className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1C2530] hover:text-[#1C2530] mb-2 mt-2">
+      <button onClick={() => window.history.back()} className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#000000] hover:text-[#000000] mb-2 mt-2">
         <ArrowLeft size={13} /> Back
       </button>
-      <h1 className="text-xl font-extrabold text-[#1C2530]">{b.name} — 3D</h1>
-      <p className="text-sm text-[#1C2530] mt-0.5 mb-4">{b.address}</p>
+      <h1 className="text-xl font-extrabold text-[#000000]">{b.name} — 3D</h1>
+      <p className="text-sm text-[#000000] mt-0.5 mb-4">{b.address}</p>
 
       <div className="grid gap-4 min-[900px]:grid-cols-[1fr_320px]">
         <div

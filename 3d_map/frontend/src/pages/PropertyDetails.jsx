@@ -1,8 +1,7 @@
-import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   AlertTriangle, ArrowLeft, Box, Building2, CalendarDays, FileText,
-  Layers, MapPin, Ruler, ShieldCheck, UserRound
+  Layers, MapPin, Ruler, ShieldCheck, UserRound,
 } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
 import DetailGrid from '../components/ui/DetailGrid.jsx'
@@ -42,16 +41,16 @@ export default function PropertyDetails() {
     <div className="property-detail-page max-w-[1120px] mx-auto pb-12">
       <Breadcrumb current="Property Details" />
 
-      <button className="property-back-link text-[#1C2530]" onClick={() => navigate('/dashboard')}>
+      <button className="property-back-link" onClick={() => navigate('/dashboard')}>
         <ArrowLeft size={14} /> Back to My Properties
       </button>
 
       <section className={`property-detail-hero ${conflict ? 'is-conflict' : verified ? 'is-verified' : 'is-review'}`}>
         <div className="property-detail-icon"><Building2 size={25} /></div>
         <div className="min-w-0 flex-1">
-          <div className="property-detail-kicker text-[#1C2530] font-bold">Registered residential volume</div>
-          <h1 className="text-xl font-extrabold text-[#1C2530] m-0" style={{ color: '#000000' }}>{unit.unitLabel || 'Property Unit'}</h1>
-          <p className="text-sm text-[#1C2530] mt-1 flex items-center gap-1.5 font-medium"><MapPin size={14} /> {building?.name || 'Registered Building'} · {building?.address || 'Chennai'}</p>
+          <div className="property-detail-kicker">Registered residential volume</div>
+          <h1>{unit.unitLabel || 'Property Unit'}</h1>
+          <p><MapPin size={14} /> {building?.name || 'Registered Building'} · {building?.address || 'Chennai'}</p>
         </div>
         <StatusPill variant={statusVariant}>{statusLabel}</StatusPill>
       </section>
@@ -61,10 +60,10 @@ export default function PropertyDetails() {
           <section className="property-detail-section property-location-section">
             <div className="property-section-heading">
               <div>
-                <span className="property-section-eyebrow text-[#1C2530]">Location</span>
-                <h2 className="text-[#000000]">Property location</h2>
+                <span className="property-section-eyebrow">Location</span>
+                <h2>Property location</h2>
               </div>
-              <span className="property-map-badge text-[#1C2530]"><MapPin size={13} /> 2D parcel map</span>
+              <span className="property-map-badge"><MapPin size={13} /> 2D parcel map</span>
             </div>
             <MapInset
               highlightUnit
@@ -72,7 +71,7 @@ export default function PropertyDetails() {
               address={building?.address || 'Chennai'}
               label={unit.unitLabel}
             />
-            <p className="property-map-note text-[#1C2530]">
+            <p className="property-map-note">
               The highlighted footprint shows the registered parcel associated with this unit. Open the 3D view for vertical floor boundaries.
             </p>
           </section>
@@ -80,8 +79,8 @@ export default function PropertyDetails() {
           <section className="property-detail-section">
             <div className="property-section-heading">
               <div>
-                <span className="property-section-eyebrow text-[#1C2530]">Registry</span>
-                <h2 className="text-[#000000]">Ownership and spatial details</h2>
+                <span className="property-section-eyebrow">Registry</span>
+                <h2>Ownership and spatial details</h2>
               </div>
             </div>
             <DetailGrid
@@ -100,44 +99,44 @@ export default function PropertyDetails() {
           <section className="property-detail-section property-id-section">
             <div className="property-section-heading">
               <div>
-                <span className="property-section-eyebrow text-[#1C2530]">National spatial identity</span>
-                <h2 className="text-[#000000]">3D ULPIN</h2>
+                <span className="property-section-eyebrow">National spatial identity</span>
+                <h2>3D ULPIN</h2>
               </div>
-              <ShieldCheck size={20} className="text-[#1C2530]" />
+              <ShieldCheck size={20} />
             </div>
-            <code className="text-[#1C2530]">{unit.ulpin || unit.unit_ulpin}</code>
+            <code>{unit.ulpin || unit.unit_ulpin}</code>
           </section>
         </div>
 
         <aside className="property-detail-aside">
           <section className="property-action-panel">
-            <h2 className="text-[#000000]">Property services</h2>
-            <p className="text-[#1C2530]">Open official records or report a discrepancy.</p>
+            <h2>Property services</h2>
+            <p>Open official records or report a discrepancy.</p>
             <button className="property-action primary" onClick={() => navigate(`/passport/${encodeURIComponent(unit.id || unit.ulpin)}`)}>
               <ShieldCheck size={17} />
-              <span><strong className="text-[#000000]">Digital Passport</strong><small className="text-[#1C2530]">Verified deed and QR record</small></span>
+              <span><strong>Digital Passport</strong><small>Verified deed and QR record</small></span>
             </button>
             <button className="property-action" onClick={() => navigate(`/portal/building/${building?.id}/3d`)} disabled={!building?.id}>
               <Box size={17} />
-              <span><strong className="text-[#000000]">View Building in 3D</strong><small className="text-[#1C2530]">Inspect floor and unit volume</small></span>
+              <span><strong>View Building in 3D</strong><small>Inspect floor and unit volume</small></span>
             </button>
             <button className="property-action warning" onClick={() => navigate(`/portal/report/${encodeURIComponent(unit.id || unit.ulpin)}`)}>
               <AlertTriangle size={17} />
-              <span><strong className="text-[#000000]">Report a Problem</strong><small className="text-[#1C2530]">Area, owner, or boundary issue</small></span>
+              <span><strong>Report a Problem</strong><small>Area, owner, or boundary issue</small></span>
             </button>
           </section>
 
           <section className="property-summary-panel">
-            <h2 className="text-[#000000]">At a glance</h2>
-            <div><Ruler size={15} /><span className="text-[#1C2530]">Area</span><strong className="text-[#000000]">{area} m²</strong></div>
-            <div><Layers size={15} /><span className="text-[#1C2530]">Floor</span><strong className="text-[#000000]">{unit.floor ?? 1}</strong></div>
-            <div><UserRound size={15} /><span className="text-[#1C2530]">Ownership</span><strong className="text-[#000000]">{unit.rightsType || 'Owned'}</strong></div>
-            <div><CalendarDays size={15} /><span className="text-[#1C2530]">Updated</span><strong className="text-[#000000]">{unit.lastUpdated || 'Sep 2026'}</strong></div>
+            <h2>At a glance</h2>
+            <div><Ruler size={15} /><span>Area</span><strong>{area} m²</strong></div>
+            <div><Layers size={15} /><span>Floor</span><strong>{unit.floor ?? 1}</strong></div>
+            <div><UserRound size={15} /><span>Ownership</span><strong>{unit.rightsType || 'Owned'}</strong></div>
+            <div><CalendarDays size={15} /><span>Updated</span><strong>{unit.lastUpdated || 'Sep 2026'}</strong></div>
           </section>
 
           <div className="property-help-card">
             <FileText size={18} />
-            <div><strong className="text-[#000000]">Need help reading this record?</strong><p className="text-[#1C2530]">Use Help & Support from Profile & Settings.</p></div>
+            <div><strong>Need help reading this record?</strong><p>Use Help & Support from Profile & Settings.</p></div>
           </div>
         </aside>
       </div>
