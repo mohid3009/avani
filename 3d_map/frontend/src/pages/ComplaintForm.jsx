@@ -4,7 +4,8 @@ import { CheckCircle2, Clock, ChevronRight, ArrowLeft } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
 import MiniRow from '../components/ui/MiniRow.jsx'
 import StatusPill from '../components/ui/StatusPill.jsx'
-import { addComplaint, complaints, currentUser, getUnit } from '../mockData.js'
+import { fileComplaint } from '../api.js'
+import { useComplaints, useUnit } from '../portalData.js'
 
 const ISSUE_TYPES = [
   'Boundary mismatch',
@@ -16,31 +17,42 @@ const ISSUE_TYPES = [
 export default function ComplaintForm() {
   const { unitId } = useParams()
   const navigate = useNavigate()
-  const unit = getUnit(unitId)
+  const { data: unit, loading } = useUnit(unitId)
+  const { data: complaints } = useComplaints()
   const [issueType, setIssueType] = useState(ISSUE_TYPES[0])
   const [description, setDescription] = useState('')
   const [error, setError] = useState(null)
-  const citizenComplaints = complaints.filter((c) => currentUser.ownedUnitIds.includes(c.unitId))
+  const [busy, setBusy] = useState(false)
+  const citizenComplaints = complaints || []
 
+  if (loading) return <div className="loading muted">loading unit…</div>
   if (!unit) {
     return (
       <div className="max-w-[640px]">
         <Breadcrumb current="Report Issue" />
         <div className="bg-surface border border-line rounded-[14px] p-6 text-sm text-ink-mid">
           Unit not found.{' '}
-          <Link to="/portal/records" className="text-[#4C5BD4] font-semibold">Back to records</Link>
+          <Link to="/portal/records" className="text-[#176B55] font-semibold">Back to records</Link>
         </div>
       </div>
     )
   }
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault()
     if (!description.trim()) {
       setError('Please describe the issue before submitting.')
       return
     }
-    const ticketId = addComplaint({ unitId: unit.id, issueType, description })
+    setBusy(true)
+    let ticketId
+    try {
+      ticketId = await fileComplaint({ unitId: unit.id, buildingId: unit.building.id, issueType, description })
+    } catch (err) {
+      setError(`Could not submit: ${err.message}`)
+      setBusy(false)
+      return
+    }
     navigate(`/portal/passport/${unit.id}`, {
       state: { toast: `Complaint ${ticketId} filed — the registry will respond within 7 days.` },
     })
@@ -67,7 +79,7 @@ export default function ComplaintForm() {
           <select
             value={issueType}
             onChange={(e) => setIssueType(e.target.value)}
-            className="mt-1 w-full bg-page border border-line rounded-[10px] px-3 py-2.5 text-sm text-ink outline-none focus:border-[#4C5BD4]"
+            className="mt-1 w-full bg-page border border-line rounded-[10px] px-3 py-2.5 text-sm text-ink outline-none focus:border-[#176B55]"
           >
             {ISSUE_TYPES.map((t) => (
               <option key={t}>{t}</option>
@@ -87,14 +99,15 @@ export default function ComplaintForm() {
               setDescription(e.target.value)
               setError(null)
             }}
-            className="mt-1 w-full bg-page border border-line rounded-[10px] px-3 py-2.5 text-sm text-ink placeholder-ink-soft outline-none focus:border-[#4C5BD4] resize-y"
+            className="mt-1 w-full bg-page border border-line rounded-[10px] px-3 py-2.5 text-sm text-ink placeholder-ink-soft outline-none focus:border-[#176B55] resize-y"
             placeholder="Describe what does not match the record…"
           />
         </label>
         {error && <p id="issue-description-error" role="alert" className="text-xs text-[#B42318] mt-2">{error}</p>}
         <button
           type="submit"
-          className="mt-4 w-full bg-[#4C5BD4] text-white text-sm font-semibold rounded-[10px] px-4 py-2.5 hover:bg-[#3F4DBD]"
+          disabled={busy}
+          className="mt-4 w-full bg-[#176B55] text-white text-sm font-semibold rounded-[10px] px-4 py-2.5 hover:bg-[#0F5442]"
         >
           Submit report
         </button>
@@ -106,7 +119,6 @@ export default function ComplaintForm() {
           <p className="text-sm text-ink-mid">Nothing reported yet.</p>
         )}
         {citizenComplaints.map((c, i) => {
-          const u = getUnit(c.unitId)
           return (
             <MiniRow
               key={c.id}
@@ -118,7 +130,7 @@ export default function ComplaintForm() {
                 )
               }
               title={`${c.id} · ${c.issueType}`}
-              subtitle={`${u ? u.unitLabel : c.unitId} · ${c.description}`}
+              subtitle={`${c.unitId} · ${c.description}`}
               pill={
                 <StatusPill variant={c.status === 'resolved' ? 'verified' : 'review'}>
                   {c.status}
@@ -130,7 +142,7 @@ export default function ComplaintForm() {
         })}
         <Link
           to="/portal/records"
-          className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#4C5BD4] hover:underline"
+          className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#176B55] hover:underline"
         >
           Browse records <ChevronRight size={13} />
         </Link>

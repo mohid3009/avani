@@ -3,28 +3,28 @@ import { MousePointer, CircleDot, ArrowLeft } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
 import DetailGrid from '../components/ui/DetailGrid.jsx'
 import Building3DScene from '../components/Building3DScene.jsx'
-import { getBuilding, currentUser } from '../mockData.js'
+import { myOwnerId } from '../api.js'
+import { useBuilding } from '../portalData.js'
 
 export default function Building3DView() {
   const { id } = useParams()
-  const b = getBuilding(id)
+  const { data: b, loading } = useBuilding(id)
 
+  if (loading) return <div className="loading muted">loading building…</div>
   if (!b) {
     return (
       <div className="max-w-[640px]">
         <Breadcrumb current="3D Building View" />
         <div className="bg-surface border border-line rounded-[14px] p-6 text-sm text-ink-mid">
           Building not found.{' '}
-          <Link to="/portal/records" className="text-[#4C5BD4] font-semibold">Back to records</Link>
+          <Link to="/portal/records" className="text-[#176B55] font-semibold">Back to records</Link>
         </div>
       </div>
     )
   }
 
   // highlight the viewer's own unit's floor when they own one here
-  const ownedHere = b.units.find(
-    (u) => currentUser.ownedUnitIds.includes(u.id),
-  )
+  const ownedHere = b.units.find((u) => u.ownerId && u.ownerId === myOwnerId())
   const unitFloor = ownedHere?.floor ?? null
 
   return (

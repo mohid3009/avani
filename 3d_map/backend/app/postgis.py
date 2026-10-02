@@ -207,6 +207,8 @@ ON CONFLICT (session_id) DO NOTHING;
 ALTER TABLE ulpin_units ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION;
 ALTER TABLE ulpin_units ADD COLUMN IF NOT EXISTS evidence TEXT;
 ALTER TABLE ulpin_units ADD COLUMN IF NOT EXISTS validation_status TEXT DEFAULT 'valid';
+-- everything else the UI tracks on a unit (revision, z range, edit history, ...)
+ALTER TABLE ulpin_units ADD COLUMN IF NOT EXISTS props JSONB NOT NULL DEFAULT '{}'::jsonb;
 """
 
 
@@ -456,6 +458,24 @@ def fetch_buildings(session_id=None):
     }
 
 
+def fetch_building(building_id):
+    """One saved building as a GeoJSON Feature, or None."""
+    if not _pg_up():
+        return _fb_load(_BUILDINGS_FILE).get(building_id)
+    ensure_init()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT session_id, props, ST_AsGeoJSON(geom) FROM lidar_buildings "
+                "WHERE building_id = %s",
+                (building_id,),
+            )
+            r = cur.fetchone()
+    if not r:
+        return None
+    return {"type": "Feature", "properties": {**r[1], "session_id": r[0]}, "geometry": json.loads(r[2])}
+
+
 def list_sessions():
     """All scan sessions with live building counts, newest first."""
     ensure_init()
@@ -513,11 +533,52 @@ def clear_buildings():
 
 # ---------------- 3D ULPIN units ----------------
 
+_UNIT_COLS = (
+    "unit_ulpin", "base_ulpin", "floor_index", "unit_no", "polygon", "area_sqm",
+    "rights_type", "owner_id", "owner_name", "segmentation", "confidence", "evidence",
+    "validation_status",
+)
+
+_UNIT_UPSERT = """
+INSERT INTO ulpin_units (unit_ulpin, building_id, base_ulpin, floor_index, unit_no, polygon,
+                         area_sqm, rights_type, owner_id, owner_name, segmentation,
+                         confidence, evidence, validation_status, props)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+ON CONFLICT (unit_ulpin) DO UPDATE SET
+  building_id = EXCLUDED.building_id, polygon = EXCLUDED.polygon,
+  area_sqm = EXCLUDED.area_sqm, rights_type = EXCLUDED.rights_type,
+  owner_id = EXCLUDED.owner_id, owner_name = EXCLUDED.owner_name,
+  segmentation = EXCLUDED.segmentation, confidence = EXCLUDED.confidence,
+  evidence = EXCLUDED.evidence, validation_status = EXCLUDED.validation_status,
+  props = EXCLUDED.props
+"""
+
+
+def _unit_row(building_id, u):
+    extra = {k: v for k, v in u.items() if k not in _UNIT_COLS and k != "building_id"}
+    return (
+        u["unit_ulpin"], building_id, u["base_ulpin"], u["floor_index"], u["unit_no"],
+        json.dumps(u["polygon"]), u.get("area_sqm"), u.get("rights_type"),
+        u.get("owner_id"), u.get("owner_name"), u.get("segmentation"),
+        u.get("confidence"), u.get("evidence"), u.get("validation_status") or "valid",
+        json.dumps(extra),
+    )
+
+
+def _unit_from_row(r):
+    # r = (building_id, props, *_UNIT_COLS)
+    return {**(r[1] or {}), "building_id": r[0], **dict(zip(_UNIT_COLS, r[2:]))}
+
+
+_UNIT_SELECT = "SELECT building_id, props, " + ", ".join(_UNIT_COLS) + " FROM ulpin_units"
+
+
 def save_units(building_id, units):
     """Replace the full unit tree of one building; returns the saved count."""
     if not _pg_up():
         for u in units:
             u["building_id"] = building_id
+        _fb_delete_units(building_id)
         _fb_save_units(units)
         return len(units)
     ensure_init()
@@ -525,32 +586,28 @@ def save_units(building_id, units):
         with conn.cursor() as cur:
             cur.execute("DELETE FROM ulpin_units WHERE building_id = %s", (building_id,))
             if units:
-                rows = [
-                    (
-                        u["unit_ulpin"], building_id, u["base_ulpin"], u["floor_index"],
-                        u["unit_no"], json.dumps(u["polygon"]), u.get("area_sqm"),
-                        u.get("rights_type"), u.get("owner_id"), u.get("owner_name"),
-                        u.get("segmentation"), u.get("confidence"), u.get("evidence"), u.get("validation_status", "valid"),
-                    )
-                    for u in units
-                ]
                 psycopg2.extras.execute_batch(
-                    cur,
-                    """INSERT INTO ulpin_units (unit_ulpin, building_id, base_ulpin, floor_index,
-                                               unit_no, polygon, area_sqm, rights_type, owner_id,
-                                               owner_name, segmentation, confidence, evidence, validation_status)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (unit_ulpin) DO UPDATE SET
-                         polygon = EXCLUDED.polygon, area_sqm = EXCLUDED.area_sqm,
-                         rights_type = EXCLUDED.rights_type, owner_id = EXCLUDED.owner_id,
-                         owner_name = EXCLUDED.owner_name, segmentation = EXCLUDED.segmentation,
-                         confidence = EXCLUDED.confidence, evidence = EXCLUDED.evidence,
-                         validation_status = EXCLUDED.validation_status""",
-                    rows,
-                    page_size=500,
+                    cur, _UNIT_UPSERT, [_unit_row(building_id, u) for u in units], page_size=500
                 )
-            cur.execute("SELECT COUNT(*) FROM ulpin_units WHERE building_id = %s", (building_id,))
-            return cur.fetchone()[0]
+            return len(units)
+
+
+def save_floor_units(building_id, floor_index, units):
+    """Replace the units of a single floor in a building; returns the saved count."""
+    if not _pg_up():
+        return _fb_save_floor_units(building_id, floor_index, units)
+    ensure_init()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ulpin_units WHERE building_id = %s AND floor_index = %s",
+                (building_id, floor_index),
+            )
+            if units:
+                psycopg2.extras.execute_batch(
+                    cur, _UNIT_UPSERT, [_unit_row(building_id, u) for u in units], page_size=500
+                )
+            return len(units)
 
 
 def fetch_units(building_id):
@@ -561,23 +618,21 @@ def fetch_units(building_id):
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT unit_ulpin, base_ulpin, floor_index, unit_no, polygon, area_sqm,
-                          rights_type, owner_id, owner_name, segmentation, validation_status, confidence, evidence
-                   FROM ulpin_units WHERE building_id = %s
-                   ORDER BY floor_index, unit_no""",
+                _UNIT_SELECT + " WHERE building_id = %s ORDER BY floor_index, unit_no",
                 (building_id,),
             )
-            rows = cur.fetchall()
-    return [
-        {
-            "unit_ulpin": r[0], "building_id": building_id, "base_ulpin": r[1],
-            "floor_index": r[2], "unit_no": r[3], "polygon": r[4], "area_sqm": r[5],
-            "rights_type": r[6], "owner_id": r[7], "owner_name": r[8],
-            "segmentation": r[9], "validation_status": r[10],
-            "confidence": r[11], "evidence": r[12],
-        }
-        for r in rows
-    ]
+            return [_unit_from_row(r) for r in cur.fetchall()]
+
+
+def fetch_all_units():
+    """Every ULPIN unit across all buildings (registrar search index)."""
+    if not _pg_up():
+        return [u for units in _fb_load(_UNITS_FILE).values() for u in units]
+    ensure_init()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_UNIT_SELECT + " ORDER BY building_id, floor_index, unit_no")
+            return [_unit_from_row(r) for r in cur.fetchall()]
 
 
 def delete_units(building_id):
@@ -590,79 +645,55 @@ def delete_units(building_id):
             cur.execute("DELETE FROM ulpin_units WHERE building_id = %s", (building_id,))
             return cur.rowcount
 
+
+# ---------------- unit corrections (surveyor proposes -> registrar resolves) ----
+# `patch` holds the whole proposal (before/after/overlap figures) as built by
+# the frontend; the unit itself is rewritten through save_units.
+
 def propose_unit_edit(building_id, unit_ulpin, proposed_by, patch):
     ensure_init()
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO pending_unit_edits (building_id, unit_ulpin, proposed_by, patch) VALUES (%s, %s, %s, %s) RETURNING id",
+                "SELECT 1 FROM pending_unit_edits "
+                "WHERE building_id = %s AND unit_ulpin = %s AND status = 'pending'",
+                (building_id, unit_ulpin),
+            )
+            if cur.fetchone():
+                raise ValueError("This unit already has a pending correction")
+            cur.execute(
+                "INSERT INTO pending_unit_edits (building_id, unit_ulpin, proposed_by, patch) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
                 (building_id, unit_ulpin, proposed_by, json.dumps(patch)),
             )
-            return cur.fetchone()[0]
+            return str(cur.fetchone()[0])
+
 
 def get_pending_unit_edits():
     ensure_init()
     with _conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, building_id, unit_ulpin, proposed_by, patch, status, created_at FROM pending_unit_edits WHERE status = 'pending'")
+            cur.execute(
+                "SELECT id, patch, status, created_at FROM pending_unit_edits "
+                "WHERE status = 'pending' ORDER BY created_at"
+            )
             rows = cur.fetchall()
     return [
-        {
-            "id": r[0], "building_id": r[1], "unit_ulpin": r[2],
-            "proposed_by": r[3], "patch": r[4], "status": r[5], "created_at": r[6].isoformat()
-        }
+        {**(r[1] or {}), "id": str(r[0]), "status": r[2], "created_at": r[3].isoformat()}
         for r in rows
     ]
 
-def confirm_unit_edit(edit_id, status):
-    ensure_init()
-    with _conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE pending_unit_edits SET status = %s, resolved_at = now() WHERE id = %s RETURNING building_id, unit_ulpin, patch", (status, edit_id))
-            row = cur.fetchone()
-            if not row:
-                return None
-            building_id, unit_ulpin, patch = row
-            if status == 'confirmed':
-                if 'owner_name' in patch:
-                    cur.execute("UPDATE ulpin_units SET owner_name = %s WHERE unit_ulpin = %s", (patch['owner_name'], unit_ulpin))
-                if 'rights_type' in patch:
-                    cur.execute("UPDATE ulpin_units SET rights_type = %s WHERE unit_ulpin = %s", (patch['rights_type'], unit_ulpin))
-            return row
 
-def save_floor_units(building_id, floor_index, units):
-    """Replace the units of a single floor in a building; returns the saved count."""
-    if not _pg_up():
-        return _fb_save_floor_units(building_id, floor_index, units)
+def resolve_unit_edit(edit_id, status, extra=None):
+    """Mark a pending correction confirmed/rejected; returns the merged record or None."""
     ensure_init()
     with _conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM ulpin_units WHERE building_id = %s AND floor_index = %s", (building_id, floor_index))
-            if units:
-                rows = [
-                    (
-                        u["unit_ulpin"], building_id, u["base_ulpin"], u["floor_index"],
-                        u["unit_no"], json.dumps(u["polygon"]), u.get("area_sqm"),
-                        u.get("rights_type"), u.get("owner_id"), u.get("owner_name"),
-                        u.get("segmentation"), u.get("confidence"), u.get("evidence"), u.get("validation_status", "valid"),
-                    )
-                    for u in units
-                ]
-                import psycopg2.extras
-                psycopg2.extras.execute_batch(
-                    cur,
-                    """INSERT INTO ulpin_units (unit_ulpin, building_id, base_ulpin, floor_index,
-                                               unit_no, polygon, area_sqm, rights_type, owner_id,
-                                               owner_name, segmentation, confidence, evidence, validation_status)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (unit_ulpin) DO UPDATE SET
-                         polygon = EXCLUDED.polygon, area_sqm = EXCLUDED.area_sqm,
-                         rights_type = EXCLUDED.rights_type, owner_id = EXCLUDED.owner_id,
-                         owner_name = EXCLUDED.owner_name, segmentation = EXCLUDED.segmentation,
-                         confidence = EXCLUDED.confidence, evidence = EXCLUDED.evidence,
-                         validation_status = EXCLUDED.validation_status""",
-                    rows,
-                    page_size=500,
-                )
-                return len(rows)
-            return 0
+            cur.execute(
+                "UPDATE pending_unit_edits SET status = %s, resolved_at = now(), "
+                "patch = patch || %s::jsonb "
+                "WHERE id = %s AND status = 'pending' RETURNING id, patch, status",
+                (status, json.dumps(extra or {}), edit_id),
+            )
+            r = cur.fetchone()
+    return {**r[1], "id": str(r[0]), "status": r[2]} if r else None

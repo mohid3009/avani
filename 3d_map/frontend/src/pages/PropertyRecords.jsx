@@ -4,7 +4,8 @@ import { Search, Building2, MapPin, ArrowLeft } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
 import MiniRow from '../components/ui/MiniRow.jsx'
 import StatusPill from '../components/ui/StatusPill.jsx'
-import { buildings, currentUser } from '../mockData.js'
+import { myOwnerId } from '../api.js'
+import { useRegisteredBuildings } from '../portalData.js'
 
 const CHIPS = [
   { key: 'all', label: 'All' },
@@ -18,13 +19,16 @@ export default function PropertyRecords() {
   const [q, setQ] = useState('')
   const [filter, setFilter] = useState('all')
 
-  const rows = buildings
+  const { data: buildings, loading } = useRegisteredBuildings()
+  const me = myOwnerId()
+
+  const rows = (buildings || [])
     .map((b) => ({
       b,
       status: b.units.every((u) => u.status === 'verified')
         ? 'verified'
         : 'review',
-      mine: b.units.some((u) => currentUser.ownedUnitIds.includes(u.id)),
+      mine: !!me && b.units.some((u) => u.ownerId === me),
     }))
     .filter((r) => {
       if (filter === 'verified' && r.status !== 'verified') return false
@@ -54,7 +58,7 @@ export default function PropertyRecords() {
         <div className="relative flex-1 max-w-[420px]">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-soft" />
           <input
-            className="w-full bg-surface border border-line rounded-[10px] pl-9 pr-3 py-2 text-sm text-ink placeholder-ink-soft outline-none focus:border-[#4C5BD4]"
+            className="w-full bg-surface border border-line rounded-[10px] pl-9 pr-3 py-2 text-sm text-ink placeholder-ink-soft outline-none focus:border-[#176B55]"
             placeholder="Search by name, ULPIN or address…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -70,7 +74,7 @@ export default function PropertyRecords() {
             aria-pressed={filter === c.key}
             className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
               filter === c.key
-                ? 'bg-[#4C5BD4] text-white border-[#4C5BD4]'
+                ? 'bg-[#176B55] text-white border-[#176B55]'
                 : 'bg-surface text-ink-mid border-line hover:text-ink hover:bg-neutralbg'
             }`}
           >
@@ -80,7 +84,8 @@ export default function PropertyRecords() {
       </div>
 
       <div className="bg-surface border border-line rounded-[14px] p-3 mt-4">
-        {rows.length === 0 && (
+        {loading && <p className="text-sm text-ink-mid px-2 py-4">loading registry…</p>}
+        {!loading && rows.length === 0 && (
           <p className="text-sm text-ink-mid px-2 py-4">No parcels match your search.</p>
         )}
         {rows.map((r, i) => (

@@ -3,7 +3,7 @@ import { Navigate, NavLink, useNavigate } from 'react-router-dom'
 import {
   getSavedBuildings, getSessions, deleteSession, updateBuilding,
   confirmBuildingEdit, deleteBuilding as deleteBuildingApi,
-  getRegion, allUnits, demoBaseUlpin, digipin, citizenOwns,
+  getRegion, allUnits, digipin, citizenOwns, peekUnits, segmentationStatus,
   getPendingUnitEdits, confirmUnitCorrection, rejectUnitCorrection,
   proposeBuildingEdit, confirmPendingBuildingEdit, rejectPendingBuildingEdit, getPendingBuildingEdits,
 } from '../api.js'
@@ -11,6 +11,7 @@ import BuildingsMap from './BuildingsMap.jsx'
 import CitizenDashboard from './CitizenDashboard.jsx'
 import Topbar from './layout/Topbar.jsx'
 import Sidebar from './layout/Sidebar.jsx'
+import './staff.css'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -29,6 +30,33 @@ function bboxOfFeature(feature) {
   return { latMin, lonMin, spanLat: latMax - latMin, spanLon: lonMax - lonMin }
 }
 
+// plain-language height provenance; MEASURED ones count as real data
+const HEIGHT_SOURCE = {
+  lidar: 'Measured by LiDAR',
+  'google-open-buildings-2.5d': 'Google Open Buildings 2.5D',
+  'surveyor-verified': 'Verified by surveyor',
+  'registrar-approved': 'Approved by registrar',
+  'tag-height': 'OpenStreetMap height tag',
+  'tag-levels': 'Estimated from OSM storey count',
+  'assumed-1-story': 'Assumed 1 storey (no data)',
+  edited: 'Footprint edited',
+  manual: 'Drawn manually',
+}
+const MEASURED = new Set(['lidar', 'google-open-buildings-2.5d', 'surveyor-verified', 'registrar-approved', 'tag-height'])
+const heightLabel = (p) => {
+  const label = HEIGHT_SOURCE[p.height_source] || 'Estimated from building type'
+  return p.height_source === 'google-open-buildings-2.5d' && p.height_year ? `${label} (${p.height_year})` : label
+}
+
+const when = (iso) => (iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—')
+
+// [label, before, after, unit] rows that a building proposal actually changes
+const proposalChanges = (p) => [
+  ['Height', p.before.height_m, p.after.height_m, ' m'],
+  ['Storeys', p.before.stories, p.after.stories, ''],
+  ['Basements', p.before.basements ?? 0, p.after.basements ?? 0, ''],
+].filter(([, a, b]) => a !== b)
+
 // ── component ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard(props) {
@@ -36,7 +64,7 @@ export default function Dashboard(props) {
   return <DashboardContent {...props} />
 }
 
-function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onLanguageChange }) {
+function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange }) {
 
   const [state, setState]               = useState('loading') // loading | ready | empty | unavailable
   const [features, setFeatures]         = useState([])
@@ -49,7 +77,6 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
   const [reloadKey, setReloadKey]       = useState(0)
   const [editingBld, setEditingBld]     = useState(false)  // inline dashboard edit
   const [editDraft, setEditDraft]       = useState(null)
-  const [panelTab, setPanelTab]         = useState('sessions') // registrar sidebar tab
   const [toast, setToast]               = useState(null)   // { kind: 'success' | 'info', text }
   const [resolvingIds, setResolvingIds] = useState(() => new Set())
   const [unavailableErr, setUnavailableErr] = useState(null)
@@ -341,11 +368,6 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
         out.push({ id: p.building_id, name: p.name || p.building_id, note: `${p.stories ?? '—'} str`, sub: null })
         continue
       }
-      const base = demoBaseUlpin(p.building_id)
-      if (base.toLowerCase().includes(needle)) {
-        out.push({ id: p.building_id, name: p.name || p.building_id, note: base, sub: null })
-        continue
-      }
       const hits = unitIndex.filter((e) => e.buildingId === p.building_id && e.hay.includes(needle))
       if (hits.length) {
         out.push({
@@ -382,11 +404,15 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
     const feature = features.find((f) => f.properties.building_id === selectedId)
     if (!feature) return
 
-    const stories = Math.min(10, Math.max(1, parseInt(editDraft.floors) || 1))
-    const basements = Math.max(0, parseInt(editDraft.basements) || 0)
-    const height_m = Math.min(30, Math.max(0.5, parseFloat(editDraft.height) || stories * 3))
-    const note = editDraft.note || ''
+    const stories = Math.min(60, Math.max(1, parseInt(editDraft.floors) || 1))
+    const basements = Math.min(6, Math.max(0, parseInt(editDraft.basements) || 0))
+    const height_m = Math.min(250, Math.max(0.5, parseFloat(editDraft.height) || stories * 3))
+    const note = (editDraft.note || '').trim()
     const file = editDraft.spatialFile || null
+    if (session?.role === 'surveyor' && !note) {
+      showToast('info', 'Add a reason so the registrar knows where the new numbers come from')
+      return
+    }
 
     try {
       const res = await proposeBuildingEdit(
@@ -397,16 +423,16 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
       )
 
       if (res.pending) {
-        showToast('info', `Proposal submitted for Registrar review — ${selectedId}`)
+        showToast('info', 'Sent to the registrar for approval')
         setFeatures((prev) =>
           prev.map((f) =>
             f.properties.building_id === selectedId
-              ? { ...f, properties: { ...f.properties, edit_status: 'pending', pending_proposal_id: res.proposal.id } }
+              ? { ...f, properties: { ...f.properties, edit_status: 'pending', pending_proposal: res.proposal, pending_proposal_id: res.proposal.id } }
               : f
           )
         )
       } else {
-        showToast('success', `✓ saved & updated live — ${selectedId}`)
+        showToast('success', 'Saved')
         setFeatures((prev) =>
           prev.map((f) => (f.properties.building_id === selectedId ? res.building : f))
         )
@@ -480,12 +506,8 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
       .catch((e) => console.error('footprint update failed:', e.message))
   }
 
-  const openPendingBuilding = (f) => {
-    setSelCountry(null); setSelRegion(null); setFocusSid(null)
-    setSelectedId(f.properties.building_id)
-  }
-
   const removeBuilding = (bid) => {
+    if (!window.confirm(`Delete building ${bid} and its record? This cannot be undone.`)) return
     deleteBuildingApi(bid)
       .then(() => {
         setFeatures((prev) => prev.filter((f) => f.properties.building_id !== bid))
@@ -515,7 +537,7 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
   const stats = useMemo(() => {
     const n = visibleFeatures.length
     if (!n) return null
-    const fromLidar = visibleFeatures.filter((f) => f.properties.height_source === 'lidar').length
+    const fromLidar = visibleFeatures.filter((f) => MEASURED.has(f.properties.height_source)).length
     const assumed   = visibleFeatures.filter((f) => f.properties.height_source === 'assumed-1-story').length
     const edited    = visibleFeatures.filter((f) => ['edited', 'manual'].includes(f.properties.height_source)).length
     const heights   = visibleFeatures.map((f) => f.properties.height_m || 0)
@@ -526,6 +548,66 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
     }
   }, [visibleFeatures])
 
+  // ── staff work queue ──────────────────────────────────────────────────────
+  const [modelStatus, setModelStatus] = useState(null)
+  useEffect(() => {
+    if (!canEditBuildings) return
+    segmentationStatus().then(setModelStatus).catch(() => setModelStatus({ ready: false, reason: 'could not reach the server' }))
+  }, [canEditBuildings])
+
+  const focusBuilding = (bid) => {
+    setSelCountry(null); setSelRegion(null); setFocusSid(null)
+    setEditingBld(false); setEditDraft(null)
+    setSelectedId(bid)
+  }
+  const nameOf = (bid) => features.find((f) => f.properties.building_id === bid)?.properties.name || bid
+
+  const unitSummary = (bid) => {
+    const us = peekUnits(bid)
+    return {
+      total: us.length,
+      fromModel: us.filter((u) => u.segmentation === 'model').length,
+      conflicts: us.filter((u) => u.validation_status === 'conflict').length,
+    }
+  }
+
+  const work = useMemo(() => {
+    if (!canEditBuildings) return null
+    const needsPlan = []
+    let unmeasured = 0
+    for (const f of visibleFeatures) {
+      const p = f.properties
+      if (!MEASURED.has(p.height_source)) unmeasured++
+      if (!peekUnits(p.building_id).some((u) => u.segmentation === 'model')) needsPlan.push(p)
+    }
+    needsPlan.sort((a, b) => (b.stories || 0) - (a.stories || 0))
+    const conflicts = new Map()
+    for (const u of allUnits()) {
+      if (u.validation_status === 'conflict') conflicts.set(u.building_id, (conflicts.get(u.building_id) || 0) + 1)
+    }
+    const footprintPending = features.filter((f) => f.properties.edit_status === 'pending' && !f.properties.pending_proposal)
+    const rejected = []
+    for (const f of features) {
+      for (const h of f.properties.edit_history || []) {
+        if (/^Rejected Surveyor proposal/.test(h.change || '')) rejected.push({ building_id: f.properties.building_id, ...h })
+      }
+    }
+    rejected.sort((a, b) => (b.at || '').localeCompare(a.at || ''))
+    return { needsPlan, unmeasured, conflicts: [...conflicts], footprintPending, rejected: rejected.slice(0, 5) }
+  }, [canEditBuildings, visibleFeatures, features, unitsVersion])
+
+  // staff start inside the biggest scan area instead of a whole-world view where its buildings are specks
+  const autoPickedRef = useRef(false)
+  useEffect(() => {
+    if (autoPickedRef.current || !canEditBuildings || selCountry || !countryTree.length) return
+    if (countryTree.some((c) => c.name === '⏳ locating…')) return
+    autoPickedRef.current = true
+    if (countryTree.length > 1) setSelCountry([...countryTree].sort((x, y) => y.buildings - x.buildings)[0].name)
+  }, [canEditBuildings, selCountry, countryTree])
+
+  const myProposals = pendingBuildingProposals.filter((p) => p.proposed_by === session?.name)
+  const reviewCount = pendingBuildingProposals.length + pendingUnitEdits.length + (work?.footprintPending.length || 0)
+
   // ── citizen map view ──────────────────────────────────────────────────────
   if (isCitizen && !citizenMapView) {
     return (
@@ -533,7 +615,6 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
         <Topbar
           session={session}
           onLogout={onLogout}
-          onSwitchRole={onSwitchRole}
           activeLanguage={activeLanguage}
           onLanguageChange={onLanguageChange}
         />
@@ -559,7 +640,6 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
       <Topbar
         session={session}
         onLogout={onLogout}
-        onSwitchRole={onSwitchRole}
         activeLanguage={activeLanguage}
         onLanguageChange={onLanguageChange}
       >
@@ -603,10 +683,18 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
       {guideOpen && state === 'ready' && (
         <div className="guide-strip">
           <span className="guide-title tiny muted">how it works</span>
-          <span className="guide-step tiny"><b>1</b> click any building on the map for details &amp; edits</span>
-          <span className="guide-step tiny">
-            <b>2</b> open its <NavLink to="/ulpin">ULPIN units</NavLink> — floors, owners, status
-          </span>
+          {isRegistrar ? (
+            <>
+              <span className="guide-step tiny"><b>1</b> everything waiting for you is under <i>To review</i> on the right</span>
+              <span className="guide-step tiny"><b>2</b> approve, or reject with a reason the surveyor will see</span>
+            </>
+          ) : (
+            <>
+              <span className="guide-step tiny"><b>1</b> pick a building from <i>Your work</i> or the map</span>
+              <span className="guide-step tiny"><b>2</b> upload its floor plan to extract the units</span>
+              <span className="guide-step tiny"><b>3</b> propose height fixes; the registrar approves them</span>
+            </>
+          )}
           <span style={{ flex: 1 }} />
           <button className="btn tiny" onClick={dismissGuide}>got it</button>
         </div>
@@ -614,7 +702,7 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
 
       <div className="parcel-strip">
         <span className="muted tiny">
-          demo city — Chennai · T. Nagar buildings from OpenStreetMap — pan, zoom &amp; tilt freely
+          saved scans from PostGIS — pan, zoom &amp; tilt freely
         </span>
         <span style={{ flex: 1 }} />
         {state === 'ready' && stats && !isCitizen && (
@@ -641,6 +729,7 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
               canEdit={canEditBuildings}
               onFootprintDrawn={handleFootprintDrawn}
               ownedIds={ownedIds}
+              frameKey={`${selCountry}|${selRegion}|${focusSid}`}
             />
           )}
           {state === 'ready' && !visibleFeatures.length && (
@@ -664,767 +753,389 @@ function DashboardContent({ session, onLogout, onSwitchRole, activeLanguage, onL
         </section>
 
         <aside className="sidebar">
-          {selected ? (
-            <div className="panel-section acc-brass">
-              <h3>building details</h3>
-              <table className="kv">
-                <tbody>
-                  <tr><td>id</td><td className="mono">{selected.building_id}</td></tr>
-                  {selected.name && <tr><td>name</td><td>{selected.name}</td></tr>}
-                  <tr><td>height</td><td>{selected.height_m} m</td></tr>
-                  <tr><td>storeys</td><td>{selected.stories}</td></tr>
-                  <tr><td>basements</td><td>{selected.basements || 0}</td></tr>
-                  <tr><td>ground Z</td><td>{selected.ground_z ?? '—'}</td></tr>
-                  <tr><td>roof Z</td><td>{selected.roof_z ?? '—'}</td></tr>
-                  <tr><td>LiDAR points</td><td>{selected.lidar_points}</td></tr>
-                  <tr><td>source</td><td>{selected.height_source}</td></tr>
-                  <tr>
-                    <td>confirmation</td>
-                    <td className={selected.edit_status === 'pending' ? 'status-pending' : selected.edit_status === 'confirmed' ? 'status-confirmed' : ''}>
-                      {selected.edit_status === 'pending' ? '⏳ pending' : selected.edit_status === 'confirmed' ? '✓ confirmed' : '—'}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div className="btn-row">
-                <button
-                  className="btn"
-                  title="open this building's 3D ULPIN unit tree"
-                  onClick={() => navigate(`/ulpin?building=${encodeURIComponent(selected.building_id)}`)}
-                >
-                  ⬢ open ULPIN view
-                </button>
-              </div>
-              {editingBld ? (
-                <div className="edit-form">
-                  <label>
-                    <span>storeys (max 10)</span>
-                    <input
-                      type="number" min="1" max="10" step="1" value={editDraft.floors}
-                      onChange={(e) => {
-                        const fl = Math.min(10, Math.max(1, parseInt(e.target.value) || 1))
-                        setEditDraft({ ...editDraft, floors: fl, height: +(fl * 3).toFixed(2) })
-                      }}
-                    />
-                  </label>
-                  <label>
-                    <span>basements</span>
-                    <input
-                      type="number" min="0" max="6" step="1" value={editDraft.basements ?? 0}
-                      onChange={(e) => setEditDraft({ ...editDraft, basements: Math.max(0, parseInt(e.target.value) || 0) })}
-                    />
-                  </label>
-                  <label>
-                    <span>height (m)</span>
-                    <input
-                      type="number" step="0.1" min="0.5" max="30" value={editDraft.height}
-                      onChange={(e) => {
-                        const h = Math.min(30, Math.max(0.5, parseFloat(e.target.value) || 0))
-                        setEditDraft({ ...editDraft, height: e.target.value, floors: Math.min(10, Math.max(1, Math.round(h / 3))) })
-                      }}
-                    />
-                  </label>
-
-                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-                    <span className="tiny muted" style={{ fontWeight: 600, display: 'block', marginBottom: 6 }}>
-                      UPLOAD SPATIAL DATASET (OPTIONAL)
-                    </span>
-                    <label style={{ display: 'block', marginBottom: 6 }}>
-                      <span className="tiny muted">Asset Type</span>
-                      <select
-                        style={{ width: '100%', background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)', padding: '4px 6px', borderRadius: 4, fontSize: 11 }}
-                        value={editDraft.assetType || 'Floor Plan / Architectural CAD'}
-                        onChange={(e) => setEditDraft({ ...editDraft, assetType: e.target.value })}
-                      >
-                        <option value="Floor Plan / Architectural CAD">Floor Plan / Architectural CAD (.dwg, .dxf, .pdf, .svg, .png, .zip)</option>
-                        <option value="LiDAR Point Cloud">LiDAR Point Cloud (.las, .laz, .ply, .pcd)</option>
-                        <option value="Oblique Imagery">Oblique Camera Imagery (.jpg, .tiff, .zip)</option>
-                        <option value="3D Model">3D Model (.gltf, .glb, .obj, .fbx, .ifc)</option>
-                      </select>
-                    </label>
-                    <label style={{ display: 'block', marginBottom: 6 }}>
-                      <span className="tiny muted">File Attachment</span>
-                      <input
-                        type="file"
-                        accept=".dwg,.dxf,.pdf,.svg,.png,.jpg,.jpeg,.tiff,.tif,.zip,.las,.laz,.ply,.pcd,.gltf,.glb,.obj,.fbx,.ifc"
-                        style={{ fontSize: 11, width: '100%', color: 'var(--muted)' }}
-                        onChange={(e) => {
-                          const file = e.target.files[0]
-                          if (file) setEditDraft({ ...editDraft, spatialFile: file })
-                        }}
-                      />
-                    </label>
-                    {editDraft.spatialFile && (
-                      <div className="mono tiny" style={{ color: 'var(--accent)', marginBottom: 6 }}>
-                        Selected: {editDraft.spatialFile.name} ({(editDraft.spatialFile.size / (1024 * 1024)).toFixed(2)} MB)
-                      </div>
-                    )}
-                    <label style={{ display: 'block' }}>
-                      <span className="tiny muted">Proposal Note / Reason</span>
-                      <textarea
-                        rows={2}
-                        placeholder="Detail height change survey notes or verification source…"
-                        style={{ width: '100%', background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px', borderRadius: 4, fontSize: 11 }}
-                        value={editDraft.note || ''}
-                        onChange={(e) => setEditDraft({ ...editDraft, note: e.target.value })}
-                      />
-                    </label>
+          {/* ── selected building ─────────────────────────────────────── */}
+          {selected && (() => {
+            const us = unitSummary(selected.building_id)
+            const proposal = selected.pending_proposal
+            const measured = MEASURED.has(selected.height_source)
+            return (
+              <section className="sp-card">
+                <div className="sp-card-head">
+                  <div>
+                    <h2 className="sp-title">{selected.name || selected.building_id}</h2>
+                    {selected.name && <p className="sp-muted mono">{selected.building_id}</p>}
                   </div>
-
-                  <div className="btn-row" style={{ marginTop: 12 }}>
-                    <button className="btn primary" onClick={saveBuildingEdit}>
-                      {session?.role === 'surveyor' ? 'Submit Proposal' : 'Save Direct Update'}
-                    </button>
-                    <button className="btn" onClick={() => { setEditingBld(false); setEditDraft(null) }}>cancel</button>
-                  </div>
+                  <button className="sp-icon" aria-label="Close building" title="Back to the list"
+                    onClick={() => { setSelectedId(null); setEditingBld(false); setEditDraft(null) }}>×</button>
                 </div>
-              ) : canEditBuildings && (
-                <div className="btn-row">
-                  <button
-                    className="btn primary"
-                    style={{ fontWeight: 700 }}
-                    onClick={() => {
-                      setEditDraft({
-                        height: selected.height_m,
-                        floors: selected.stories,
-                        basements: selected.basements || 0,
-                        spatialFile: null,
-                        assetType: 'Floor Plan / Architectural CAD',
-                        note: '',
-                      })
-                      setEditingBld(true)
-                    }}
-                  >
-                    ✏️ Edit Height &amp; Upload Floor Plan
-                  </button>
-                  {isRegistrar && selected.edit_status === 'pending' && (
-                    <button className="btn primary" title="confirm this surveyor edit" onClick={() => confirmBuilding(selected.building_id)}>
-                      ✓ confirm edit
-                    </button>
-                  )}
-                  <button className="btn danger" title="delete this building from PostGIS" onClick={() => removeBuilding(selected.building_id)}>
-                    delete
+
+                <dl className="sp-facts">
+                  <div><dt>Storeys</dt><dd>{selected.stories ?? '—'}</dd></div>
+                  <div><dt>Height</dt><dd>{selected.height_m != null ? `${selected.height_m} m` : '—'}</dd></div>
+                  <div><dt>Basements</dt><dd>{selected.basements || 0}</dd></div>
+                </dl>
+                <p className={`sp-chip ${measured ? 'is-ok' : 'is-warn'}`}>{heightLabel(selected)}</p>
+
+                <div className="sp-block">
+                  <h3 className="sp-h3">Units</h3>
+                  <p className="sp-text">
+                    {us.total === 0
+                      ? 'No units yet.'
+                      : us.fromModel === us.total
+                        ? `${us.total} units, all extracted from a floor plan.`
+                        : us.fromModel
+                          ? `${us.total} units: ${us.fromModel} from a floor plan, the rest estimated.`
+                          : `${us.total} estimated units. No floor plan has been processed yet.`}
+                    {us.conflicts > 0 && ` ${us.conflicts} overlap and need fixing.`}
+                  </p>
+                  <button className="btn primary sp-wide"
+                    onClick={() => navigate(`/ulpin?building=${encodeURIComponent(selected.building_id)}`)}>
+                    {!canEditBuildings ? 'View units' : us.fromModel ? 'Open unit editor' : 'Extract units from floor plan'}
                   </button>
                 </div>
-              )}
 
-              {selected.spatial_assets && selected.spatial_assets.length > 0 && (
-                <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-                  <span className="tiny muted" style={{ fontWeight: 600, display: 'block', marginBottom: 6 }}>
-                    ATTACHED SPATIAL DATASETS ({selected.spatial_assets.length})
-                  </span>
-                  {selected.spatial_assets.map((asset, idx) => (
-                    <div key={idx} style={{ padding: '6px 8px', background: 'var(--panel2)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 4 }}>
-                      <div style={{ fontWeight: 600, color: 'var(--accent)', fontSize: 11 }}>📦 {asset.asset_type}</div>
-                      <div className="mono tiny" style={{ color: 'var(--text)' }}>{asset.file_name} ({(asset.file_size / (1024 * 1024)).toFixed(2)} MB)</div>
-                      <div className="muted tiny" style={{ fontSize: 10 }}>Uploaded by {asset.uploaded_by} on {new Date(asset.uploaded_at).toLocaleDateString()}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {selected.edit_status === 'pending' && (
-                <div className="proposed-change">
-                  <h3>proposed change</h3>
-                  {proposedRows.length ? (
-                    <table className="kv">
-                      <tbody>
-                        {proposedRows.map(([field, from, to]) => (
-                          <tr key={field}>
-                            <td>{field}</td>
-                            <td><span className="old-val">{String(from)}</span> → <span className="new-val">{String(to)}</span></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <p className="muted tiny">footprint / spatial proposal — see history below.</p>
-                  )}
-                </div>
-              )}
-              {(selected.edit_history?.length || 0) > 0 && (
-                <ul className="history">
-                  {[...selected.edit_history].reverse().map((h, i) => (
-                    <li key={i}>
-                      <span className="who">{h.by} ({h.role})</span> — {h.change}
-                      <span className="when">{new Date(h.at).toLocaleString()}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ) : canEditBuildings && (
-            <div className="panel-section acc-brass" style={{ background: 'rgba(201, 164, 92, 0.08)', borderColor: 'rgba(201, 164, 92, 0.3)' }}>
-              <h3 style={{ color: 'var(--accent)', margin: 0, fontSize: 12 }}>💡 Edit Building &amp; Upload Spatial Data</h3>
-              <p className="muted tiny" style={{ margin: '6px 0 10px', lineHeight: 1.4 }}>
-                Click any building on the 3D map (or search by building ID) to view details, edit height/storeys, and attach LiDAR point clouds, 3D models, or oblique imagery.
-              </p>
-              {visibleFeatures.length > 0 && (
-                <button
-                  className="btn tiny primary"
-                  onClick={() => setSelectedId(visibleFeatures[0].properties.building_id)}
-                >
-                  Select Sample Building ({visibleFeatures[0].properties.building_id})
-                </button>
-              )}
-            </div>
-          )}
-
-          {isRegistrar && (
-            <div className="tab-btns">
-              <button className={`btn nav-sessions ${panelTab === 'sessions' ? 'primary' : ''}`} onClick={() => setPanelTab('sessions')}>
-                scan sessions
-              </button>
-              <button className={`btn nav-confirmations ${panelTab === 'confirmations' ? 'primary' : ''}`} onClick={() => setPanelTab('confirmations')}>
-                ⚑ confirmations
-                {(pendingFeatures.length + pendingUnitEdits.length) > 0 && (
-                  <span className="pending-unit-badge">{pendingFeatures.length + pendingUnitEdits.length}</span>
-                )}
-              </button>
-            </div>
-          )}
-
-          {(panelTab === 'sessions' || !isRegistrar) && (
-            <>
-              <div className="panel-section acc-blue">
-                <h3>
-                  {selRegion ? (
-                    <button className="btn tiny" onClick={() => setSelRegion(null)}>← {selCountry}</button>
-                  ) : selCountry ? (
-                    <button className="btn tiny" onClick={() => { setSelCountry(null); setSelRegion(null) }}>← all countries</button>
-                  ) : 'scans'}
-                </h3>
-
-                {!selCountry && (
-                  <>
-                    {countryTree.map((c) => (
-                      <div
-                        key={c.name}
-                        className={`group-row ${c.name === '⏳ locating…' ? 'dim' : ''}`}
-                        onClick={() => { if (c.name !== '⏳ locating…') setSelCountry(c.name) }}
-                      >
-                        <span className="group-name">{c.name}</span>
-                        <span className="muted tiny">
-                          {c.name === '⏳ locating…'
-                            ? 'resolving scan locations'
-                            : `${c.regions.length} region${c.regions.length > 1 ? 's' : ''} · ${c.buildings} bld`}
-                        </span>
-                        <span className="enter-hint tiny">{c.name === '⏳ locating…' ? '' : 'enter country →'}</span>
-                      </div>
-                    ))}
-                  </>
-                )}
-
-                {selCountry && !selRegion && (() => {
-                  const c = countryTree.find((x) => x.name === selCountry)
-                  if (!c) return <p className="muted tiny">…</p>
-                  return c.regions.map((r) => (
-                    <div key={r.key} className="group-row" onClick={() => setSelRegion(r.key)}>
-                      <span className="group-name">{r.name}</span>
-                      <span className="muted tiny">{r.scans.length} scan{r.scans.length > 1 ? 's' : ''} · {r.buildings} bld</span>
-                      <span className="enter-hint tiny">enter region →</span>
-                    </div>
-                  ))
-                })()}
-
-                {selCountry && selRegion && (() => {
-                  const c = countryTree.find((x) => x.name === selCountry)
-                  const r = c?.regions.find((x) => x.key === selRegion)
-                  if (!r) return null
-                  return (
-                    <>
-                      {r.scans.map((s) => (
-                        <div
-                          key={s.sid}
-                          className={`nav-row ${focusSid === s.sid ? 'active' : ''}`}
-                          onClick={() => focusSession(s.sid)}
-                        >
-                          <span className="session-label" title={s.label}>{s.label}</span>
-                          <span className="muted tiny">{s.count} bld</span>
-                          <span className="enter-hint tiny">{focusSid === s.sid ? 'whole region' : 'zoom'}</span>
-                          {canEdit && (
-                            <button
-                              className="btn danger tiny"
-                              title="delete this session and its buildings"
-                              onClick={(e) => { e.stopPropagation(); removeSession(s.sid) }}
-                            >✕</button>
-                          )}
-                        </div>
+                {proposal && (
+                  <div className="sp-callout">
+                    <h3 className="sp-h3">Waiting for approval</h3>
+                    <p className="sp-muted">Proposed by {proposal.proposed_by}, {when(proposal.created_at)}</p>
+                    <ul className="sp-diff">
+                      {proposalChanges(proposal).map(([k, a, b, u]) => (
+                        <li key={k}>{k}: <s>{a}{u}</s> → <b>{b}{u}</b></li>
                       ))}
-                      <p className="muted tiny">click a scan to zoom to it — click again for the whole region.</p>
-                    </>
-                  )
-                })()}
-              </div>
-            </>
-          )}
-
-          {/* ── LiDAR Re-extraction panel (Registrar sessions tab) ──── */}
-          {isRegistrar && panelTab === 'sessions' && (
-            <div className="panel-section acc-blue" style={{ marginTop: 14 }}>
-              <h3>LiDAR re-extraction</h3>
-              <p className="muted tiny" style={{ margin: '4px 0 10px', lineHeight: 1.5 }}>
-                Re-run the extraction pipeline after a new drone or LiDAR capture.
-              </p>
-              <button
-                className="btn"
-                onClick={() => showToast('info', `Re-extraction logged for ${selectedId || 'this area'}`)}
-              >
-                Log re-extraction
-              </button>
-              <p className="muted tiny" style={{ marginTop: 8, lineHeight: 1.5 }}>
-                Edits and approvals flow into the same activity log citizens see on their dashboard.
-              </p>
-            </div>
-          )}
-
-          {/* ── My Proposals panel (Surveyor sessions tab) ─────────── */}
-          {isSurveyor && (panelTab === 'sessions' || !isRegistrar) && (() => {
-            const myProposals = pendingBuildingProposals.filter(
-              (p) => p.proposed_by === session?.name || p.role === session?.role
-            )
-            return myProposals.length > 0 ? (
-              <div className="panel-section acc-clay" style={{ marginTop: 14 }}>
-                <h3>
-                  my proposals
-                  <span className="pending-unit-badge" style={{ marginLeft: 8 }}>{myProposals.length}</span>
-                </h3>
-                {myProposals.map((p) => (
-                  <div key={p.id} className="pending-row" style={{ flexDirection: 'column', gap: 4, alignItems: 'stretch' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="mono tiny">{p.building_id}</span>
-                      <span className="muted tiny">{new Date(p.created_at).toLocaleTimeString()}</span>
-                    </div>
-                    {p.before.height_m !== p.after.height_m && (
-                      <span className="muted tiny">height: {p.before.height_m} m → {p.after.height_m} m</span>
-                    )}
-                    {p.before.stories !== p.after.stories && (
-                      <span className="muted tiny">storeys: {p.before.stories} → {p.after.stories}</span>
-                    )}
-                    <div className="btn-row" style={{ marginTop: 2 }}>
-                      <button className="btn" onClick={() => setSelectedId(p.building_id)}>focus map</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null
-          })()}
-
-          {isRegistrar && panelTab === 'confirmations' && (
-            <div className="panel-section acc-clay">
-              <h3>
-                building proposals
-                {pendingBuildingProposals.length > 0 && (
-                  <span className="pending-unit-badge" style={{ marginLeft: 8 }}>{pendingBuildingProposals.length}</span>
-                )}
-              </h3>
-              {pendingBuildingProposals.length ? (
-                pendingBuildingProposals.map((p) => (
-                  <div key={p.id} className="pending-row" style={{ flexDirection: 'column', gap: 6, alignItems: 'stretch' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span className="mono tiny">{p.building_id}</span>
-                      <span className="muted tiny">{new Date(p.created_at).toLocaleTimeString()}</span>
-                    </div>
-                    <span className="muted tiny">Proposed by {p.proposed_by} ({p.role})</span>
-
-                    <table className="diff-table" style={{ marginTop: 4 }}>
-                      <thead><tr><th>Property</th><th>Current</th><th>Proposed</th></tr></thead>
-                      <tbody>
-                        {p.before.height_m !== p.after.height_m && (
-                          <tr className="diff-changed">
-                            <td>Height</td>
-                            <td className="diff-before">{p.before.height_m} m</td>
-                            <td className="diff-after">{p.after.height_m} m</td>
-                          </tr>
-                        )}
-                        {p.before.stories !== p.after.stories && (
-                          <tr className="diff-changed">
-                            <td>Storeys</td>
-                            <td className="diff-before">{p.before.stories}</td>
-                            <td className="diff-after">{p.after.stories}</td>
-                          </tr>
-                        )}
-                        {p.before.basements !== p.after.basements && (
-                          <tr className="diff-changed">
-                            <td>Basements</td>
-                            <td className="diff-before">{p.before.basements}</td>
-                            <td className="diff-after">{p.after.basements}</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-
-                    {/* Render attached spatial asset summary if available */}
-                    {p.after.spatial_assets && p.after.spatial_assets.length > p.before.spatial_assets.length && (() => {
-                      const newAsset = p.after.spatial_assets[p.after.spatial_assets.length - 1]
-                      return (
-                        <div style={{ padding: '4px 6px', background: 'rgba(201, 164, 92, 0.12)', border: '1px solid rgba(201, 164, 92, 0.25)', borderRadius: 6, marginTop: 2 }}>
-                          <span className="tiny" style={{ color: 'var(--accent)', fontWeight: 600 }}>🏷️ {newAsset.asset_type}: </span>
-                          <span className="mono tiny">{newAsset.file_name} ({(newAsset.file_size / (1024 * 1024)).toFixed(2)} MB)</span>
-                        </div>
-                      )
-                    })()}
-
-                    {p.note && <p className="muted tiny" style={{ fontStyle: 'italic', margin: '2px 0' }}>"{p.note}"</p>}
-
-                    {rejectBldProposalId === p.id ? (
-                      <div className="reject-dialog" style={{ margin: '4px 0 0' }}>
-                        <textarea
-                          className="reject-textarea"
-                          rows={2}
-                          placeholder="Rejection reason…"
-                          value={rejectBldProposalReason}
-                          onChange={(ev) => setRejectBldProposalReason(ev.target.value)}
-                        />
-                        <div className="btn-row">
-                          <button className="btn danger" onClick={handleRejectBuildingProposal}>Confirm Reject</button>
-                          <button className="btn" onClick={() => { setRejectBldProposalId(null); setRejectBldProposalReason('') }}>Cancel</button>
+                    </ul>
+                    {proposal.note && <p className="sp-note">{proposal.note}</p>}
+                    {isRegistrar && (rejectBldProposalId === proposal.id ? (
+                      <div className="sp-form">
+                        <label className="sp-field">Reason for rejecting (the surveyor sees this)
+                          <textarea rows={2} value={rejectBldProposalReason} onChange={(ev) => setRejectBldProposalReason(ev.target.value)} />
+                        </label>
+                        <div className="sp-actions">
+                          <button className="btn danger" disabled={!rejectBldProposalReason.trim()} onClick={handleRejectBuildingProposal}>Reject proposal</button>
+                          <button className="btn" onClick={() => setRejectBldProposalId(null)}>Cancel</button>
                         </div>
                       </div>
                     ) : (
-                      <div className="btn-row" style={{ marginTop: 4 }}>
-                        <button className="btn primary" onClick={() => handleApproveBuildingProposal(p.id)}>✓ Approve &amp; Apply</button>
-                        <button className="btn danger" onClick={() => { setRejectBldProposalId(p.id); setRejectBldProposalReason('') }}>✗ Reject</button>
-                        <button className="btn" onClick={() => setSelectedId(p.building_id)}>focus map</button>
+                      <div className="sp-actions">
+                        <button className="btn primary" onClick={() => handleApproveBuildingProposal(proposal.id)}>Approve</button>
+                        <button className="btn" onClick={() => { setRejectBldProposalId(proposal.id); setRejectBldProposalReason('') }}>Reject…</button>
                       </div>
-                    )}
+                    ))}
                   </div>
-                ))
-              ) : (
-                <p className="all-clear tiny">✓ no building proposals awaiting confirmation.</p>
-              )}
+                )}
 
-              <div style={{ marginTop: 16 }}>
-                <h3 style={{ marginBottom: 8 }}>
-                  unit corrections
-                  {pendingUnitEdits.length > 0 && (
-                    <span className="pending-unit-badge" style={{ marginLeft: 8 }}>{pendingUnitEdits.length}</span>
-                  )}
-                </h3>
-                {pendingUnitEdits.length ? (
-                  pendingUnitEdits.map((e) => (
-                    <div key={e.id} className="pending-row" style={{ flexDirection: 'column', gap: 6, alignItems: 'stretch' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span className="mono tiny">{e.unit_ulpin}</span>
-                        <span className="muted tiny">{new Date(e.created_at).toLocaleTimeString()}</span>
+                {!proposal && selected.edit_status === 'pending' && (
+                  <div className="sp-callout">
+                    <h3 className="sp-h3">Footprint change waiting for approval</h3>
+                    {isRegistrar
+                      ? <button className="btn primary" disabled={resolvingIds.has(selected.building_id)} onClick={() => confirmBuilding(selected.building_id)}>Confirm footprint</button>
+                      : <p className="sp-muted">The registrar will review the redrawn outline.</p>}
+                  </div>
+                )}
+
+                {canEditBuildings && !proposal && (editingBld ? (
+                  <div className="sp-block sp-form">
+                    <h3 className="sp-h3">{isSurveyor ? 'Propose a height change' : 'Edit height'}</h3>
+                    <div className="sp-grid">
+                      <label className="sp-field">Storeys
+                        <input type="number" min="1" max="60" value={editDraft.floors}
+                          onChange={(e) => {
+                            const fl = Math.min(60, Math.max(1, parseInt(e.target.value) || 1))
+                            setEditDraft({ ...editDraft, floors: fl, height: +(fl * 3).toFixed(1) })
+                          }} />
+                      </label>
+                      <label className="sp-field">Height (m)
+                        <input type="number" min="0.5" max="250" step="0.1" value={editDraft.height}
+                          onChange={(e) => setEditDraft({ ...editDraft, height: e.target.value })} />
+                      </label>
+                      <label className="sp-field">Basements
+                        <input type="number" min="0" max="6" value={editDraft.basements ?? 0}
+                          onChange={(e) => setEditDraft({ ...editDraft, basements: Math.max(0, parseInt(e.target.value) || 0) })} />
+                      </label>
+                    </div>
+                    <label className="sp-field">{isSurveyor ? 'Reason (required, shown to the registrar)' : 'Note (optional)'}
+                      <textarea rows={2} value={editDraft.note || ''} placeholder="e.g. measured on site with a laser rangefinder"
+                        onChange={(e) => setEditDraft({ ...editDraft, note: e.target.value })} />
+                    </label>
+                    <label className="sp-field">Evidence file (optional; its name is kept as a reference)
+                      <input type="file"
+                        accept=".dwg,.dxf,.pdf,.svg,.png,.jpg,.jpeg,.tiff,.tif,.zip,.las,.laz,.ply,.pcd,.gltf,.glb,.obj,.fbx,.ifc"
+                        onChange={(e) => setEditDraft({ ...editDraft, spatialFile: e.target.files[0] || null })} />
+                    </label>
+                    <div className="sp-actions">
+                      <button className="btn primary" onClick={saveBuildingEdit}>{isSurveyor ? 'Send for approval' : 'Save'}</button>
+                      <button className="btn" onClick={() => { setEditingBld(false); setEditDraft(null) }}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button className="btn"
+                    onClick={() => {
+                      setEditDraft({ height: selected.height_m, floors: selected.stories, basements: selected.basements || 0, spatialFile: null, note: '' })
+                      setEditingBld(true)
+                    }}>
+                    {isSurveyor ? 'Propose a height change' : 'Edit height'}
+                  </button>
+                ))}
+
+                {selected.spatial_assets?.length > 0 && (
+                  <div className="sp-block">
+                    <h3 className="sp-h3">Evidence on file</h3>
+                    <ul className="sp-history">
+                      {selected.spatial_assets.map((a, i) => (
+                        <li key={i}>{a.asset_type}: {a.file_name}<time>{a.uploaded_by}, {when(a.uploaded_at)}</time></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {selected.edit_history?.length > 0 && (
+                  <div className="sp-block">
+                    <h3 className="sp-h3">History</h3>
+                    <ul className="sp-history">
+                      {[...selected.edit_history].reverse().slice(0, 6).map((h, i) => (
+                        <li key={i}>{h.change}<time>{h.by}{h.role ? ` (${h.role})` : ''}, {when(h.at)}</time></li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {isRegistrar && (
+                  <button className="sp-danger" onClick={() => removeBuilding(selected.building_id)}>Delete this building</button>
+                )}
+              </section>
+            )
+          })()}
+
+          {/* ── registrar: one review list ────────────────────────────── */}
+          {!selected && isRegistrar && work && (
+            <>
+              <section className="sp-card">
+                <h2 className="sp-title">To review</h2>
+                <p className="sp-muted">
+                  {reviewCount
+                    ? `${reviewCount} item${reviewCount > 1 ? 's' : ''} waiting for your decision.`
+                    : 'All caught up. New proposals from surveyors show up here.'}
+                </p>
+              </section>
+
+              {pendingBuildingProposals.length > 0 && (
+                <section className="sp-card">
+                  <h3 className="sp-h3">Height changes <span className="sp-count">{pendingBuildingProposals.length}</span></h3>
+                  {pendingBuildingProposals.map((p) => (
+                    <article key={p.id} className="sp-item">
+                      <div className="sp-item-head">
+                        <button className="sp-link" onClick={() => focusBuilding(p.building_id)}>{nameOf(p.building_id)}</button>
+                        <span className="sp-muted">{when(p.created_at)}</span>
                       </div>
-                      <span className="muted tiny">by {e.proposed_by} · bldg {e.building_id}</span>
-                      <table className="diff-table" style={{ marginTop: 4 }}>
-                        <thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
-                        <tbody>
-                          {Object.keys(e.after).filter((k) => String(e.before[k]) !== String(e.after[k])).map((k) => (
-                            <tr key={k} className="diff-changed">
-                              <td>{k.replace(/_/g, ' ')}</td>
-                              <td className="diff-before">{e.before[k] ?? '—'}</td>
-                              <td className="diff-after">{e.after[k] ?? '—'}</td>
-                            </tr>
-                          ))}
-                          <tr className="diff-overlap-row">
-                            <td>overlap vol</td>
-                            <td className="diff-before">{e.overlap_before_m3} m³</td>
-                            <td className="diff-after">{e.overlap_after_m3} m³</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      {e.resolution_note && <p className="muted tiny">Note: {e.resolution_note}</p>}
-                      {rejectUnitId === e.id ? (
-                        <div className="reject-dialog" style={{ margin: '4px 0 0' }}>
-                          <textarea
-                            className="reject-textarea"
-                            rows={2}
-                            placeholder="Rejection reason…"
-                            value={rejectUnitReason}
-                            onChange={(ev) => setRejectUnitReason(ev.target.value)}
-                          />
-                          <div className="btn-row">
-                            <button className="btn danger" onClick={handleRejectUnitEdit}>Confirm Reject</button>
-                            <button className="btn" onClick={() => { setRejectUnitId(null); setRejectUnitReason('') }}>Cancel</button>
+                      <p className="sp-muted">Proposed by {p.proposed_by}</p>
+                      <ul className="sp-diff">
+                        {proposalChanges(p).map(([k, a, b, u]) => <li key={k}>{k}: <s>{a}{u}</s> → <b>{b}{u}</b></li>)}
+                        {p.after.spatial_assets?.length > p.before.spatial_assets?.length && (
+                          <li>Evidence: {p.after.spatial_assets.at(-1).file_name}</li>
+                        )}
+                      </ul>
+                      {p.note && <p className="sp-note">{p.note}</p>}
+                      {rejectBldProposalId === p.id ? (
+                        <div className="sp-form">
+                          <label className="sp-field">Reason for rejecting (the surveyor sees this)
+                            <textarea rows={2} value={rejectBldProposalReason} onChange={(ev) => setRejectBldProposalReason(ev.target.value)} />
+                          </label>
+                          <div className="sp-actions">
+                            <button className="btn danger" disabled={!rejectBldProposalReason.trim()} onClick={handleRejectBuildingProposal}>Reject proposal</button>
+                            <button className="btn" onClick={() => setRejectBldProposalId(null)}>Cancel</button>
                           </div>
                         </div>
                       ) : (
-                        <div className="btn-row" style={{ marginTop: 4 }}>
-                          <button className="btn primary" onClick={() => handleApproveUnitEdit(e.id)}>✓ Approve</button>
-                          <button className="btn danger" onClick={() => { setRejectUnitId(e.id); setRejectUnitReason('') }}>✗ Reject</button>
-                          <button className="btn" onClick={() => navigate(`/ulpin?building=${encodeURIComponent(e.building_id)}`)}>view unit</button>
+                        <div className="sp-actions">
+                          <button className="btn primary" onClick={() => handleApproveBuildingProposal(p.id)}>Approve</button>
+                          <button className="btn" onClick={() => { setRejectBldProposalId(p.id); setRejectBldProposalReason('') }}>Reject…</button>
                         </div>
                       )}
-                    </div>
-                  ))
-                ) : (
-                  <p className="all-clear tiny">no unit corrections pending.</p>
-                )}
-              </div>
+                    </article>
+                  ))}
+                </section>
+              )}
 
-              {/* ── Survey Queue panel ─────────────────────────────────── */}
-              {(() => {
-                const queueUnits = allUnits().filter((u) => u.validation_status !== 'confirmed').slice(0, 10)
-                return (
-                  <div className="panel-section acc-green" style={{ marginTop: 14 }}>
-                    <h3>
-                      survey queue
-                      {queueUnits.length > 0 && (
-                        <span className="pending-unit-badge" style={{ marginLeft: 8 }}>{queueUnits.length}</span>
-                      )}
-                    </h3>
-                    {queueUnits.length ? (
-                      queueUnits.map((u) => (
-                        <div key={u.unit_ulpin} className="pending-row" style={{ flexDirection: 'column', gap: 4, alignItems: 'stretch' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span className="mono tiny">{u.unit_ulpin}</span>
-                            <span className="muted tiny">{u.validation_status}</span>
-                          </div>
-                          <span className="muted tiny">{u.owner_name} · bldg {u.building_id}</span>
-                          {u.area_sqm != null && (
-                            <span className="muted tiny">{u.area_sqm} m²</span>
-                          )}
-                          <div className="btn-row" style={{ marginTop: 2 }}>
-                            <button
-                              className="btn primary"
-                              onClick={() => {
-                                const pending = getPendingUnitEdits().find((e) => e.unit_ulpin === u.unit_ulpin || e.building_id === u.building_id)
-                                if (pending) handleApproveUnitEdit(pending.id)
-                                else showToast('success', `unit ${u.unit_ulpin} marked verified`)
-                              }}
-                            >
-                              Approve
-                            </button>
-                            <button
-                              className="btn danger"
-                              onClick={() => {
-                                const pending = getPendingUnitEdits().find((e) => e.unit_ulpin === u.unit_ulpin || e.building_id === u.building_id)
-                                if (pending) { setRejectUnitId(pending.id); setRejectUnitReason('conflict flagged') }
-                                else showToast('info', `conflict flagged for ${u.unit_ulpin}`)
-                              }}
-                            >
-                              Flag Conflict
-                            </button>
+              {work.footprintPending.length > 0 && (
+                <section className="sp-card">
+                  <h3 className="sp-h3">Redrawn footprints <span className="sp-count">{work.footprintPending.length}</span></h3>
+                  <ul className="sp-list">
+                    {work.footprintPending.map((f) => (
+                      <li key={f.properties.building_id}>
+                        <button className="sp-row" onClick={() => focusBuilding(f.properties.building_id)}>
+                          <span>{f.properties.name || f.properties.building_id}</span><span className="sp-muted">Review</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {pendingUnitEdits.length > 0 && (
+                <section className="sp-card">
+                  <h3 className="sp-h3">Unit corrections <span className="sp-count">{pendingUnitEdits.length}</span></h3>
+                  {pendingUnitEdits.map((e) => (
+                    <article key={e.id} className="sp-item">
+                      <div className="sp-item-head">
+                        <span className="sp-text mono">{e.unit_ulpin}</span>
+                        <span className="sp-muted">{when(e.created_at)}</span>
+                      </div>
+                      <p className="sp-muted">Proposed by {e.proposed_by} in {nameOf(e.building_id)}</p>
+                      <ul className="sp-diff">
+                        {Object.keys(e.after).filter((k) => String(e.before[k]) !== String(e.after[k])).map((k) => (
+                          <li key={k}>{k.replace(/_/g, ' ')}: <s>{e.before[k] ?? '—'}</s> → <b>{e.after[k] ?? '—'}</b></li>
+                        ))}
+                        <li>Overlap: <s>{e.overlap_before_m3} m³</s> → <b>{e.overlap_after_m3} m³</b></li>
+                      </ul>
+                      {e.resolution_note && <p className="sp-note">{e.resolution_note}</p>}
+                      {rejectUnitId === e.id ? (
+                        <div className="sp-form">
+                          <label className="sp-field">Reason for rejecting
+                            <textarea rows={2} value={rejectUnitReason} onChange={(ev) => setRejectUnitReason(ev.target.value)} />
+                          </label>
+                          <div className="sp-actions">
+                            <button className="btn danger" disabled={!rejectUnitReason.trim()} onClick={handleRejectUnitEdit}>Reject correction</button>
+                            <button className="btn" onClick={() => setRejectUnitId(null)}>Cancel</button>
                           </div>
                         </div>
-                      ))
-                    ) : (
-                      <p className="all-clear tiny">queue clear — all units verified.</p>
-                    )}
-                  </div>
-                )
-              })()}
-            </div>
-          )}
+                      ) : (
+                        <div className="sp-actions">
+                          <button className="btn primary" onClick={() => handleApproveUnitEdit(e.id)}>Approve</button>
+                          <button className="btn" onClick={() => { setRejectUnitId(e.id); setRejectUnitReason('') }}>Reject…</button>
+                          <button className="btn" onClick={() => navigate(`/ulpin?building=${encodeURIComponent(e.building_id)}`)}>Open in unit editor</button>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </section>
+              )}
 
-          {(panelTab === 'sessions' || !isRegistrar) && (
-            <>
-              <div className="panel-section acc-green">
-                <h3>saved buildings</h3>
-                {stats ? (
-                  <table className="kv">
-                    <tbody>
-                      <tr><td>buildings</td><td>{stats.n}</td></tr>
-                      <tr><td>from LiDAR</td><td>{stats.fromLidar}</td></tr>
-                      <tr><td>assumed 1 storey</td><td>{stats.assumed}</td></tr>
-                      <tr><td>edited / manual</td><td>{stats.edited}</td></tr>
-                      <tr><td>tallest</td><td>{stats.tallest} m</td></tr>
-                      <tr><td>mean height</td><td>{stats.mean.toFixed(1)} m</td></tr>
-                    </tbody>
-                  </table>
-                ) : (
-                  <p className="muted tiny">nothing saved yet</p>
-                )}
-                <p className="muted tiny" style={{ marginTop: 10 }}>
-                  data lives in PostgreSQL/PostGIS (<span className="mono">avani.lidar_buildings</span>) — click any building on the map for details.
-                </p>
-              </div>
+              {work.conflicts.length > 0 && (
+                <section className="sp-card">
+                  <h3 className="sp-h3">Overlapping units <span className="sp-count is-quiet">{work.conflicts.length}</span></h3>
+                  <p className="sp-muted">Units on the same floor overlap. A surveyor needs to correct them before the titles are clean.</p>
+                  <ul className="sp-list">
+                    {work.conflicts.slice(0, 6).map(([bid, n]) => (
+                      <li key={bid}>
+                        <button className="sp-row" onClick={() => navigate(`/ulpin?building=${encodeURIComponent(bid)}`)}>
+                          <span>{nameOf(bid)}</span><span className="sp-muted">{n} units</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
             </>
           )}
 
-          {selected && (
-            <div className="panel-section acc-brass">
-              <h3>building details</h3>
-              <table className="kv">
-                <tbody>
-                  <tr><td>id</td><td className="mono">{selected.building_id}</td></tr>
-                  {selected.name && <tr><td>name</td><td>{selected.name}</td></tr>}
-                  <tr><td>height</td><td>{selected.height_m} m</td></tr>
-                  <tr><td>storeys</td><td>{selected.stories}</td></tr>
-                  <tr><td>basements</td><td>{selected.basements || 0}</td></tr>
-                  <tr><td>ground Z</td><td>{selected.ground_z ?? '—'}</td></tr>
-                  <tr><td>roof Z</td><td>{selected.roof_z ?? '—'}</td></tr>
-                  <tr><td>LiDAR points</td><td>{selected.lidar_points}</td></tr>
-                  <tr><td>source</td><td>{selected.height_source}</td></tr>
-                  <tr>
-                    <td>confirmation</td>
-                    <td className={selected.edit_status === 'pending' ? 'status-pending' : selected.edit_status === 'confirmed' ? 'status-confirmed' : ''}>
-                      {selected.edit_status === 'pending' ? '⏳ pending' : selected.edit_status === 'confirmed' ? '✓ confirmed' : '—'}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-              <div className="btn-row">
-                <button
-                  className="btn"
-                  title="open this building's 3D ULPIN unit tree"
-                  onClick={() => navigate(`/ulpin?building=${encodeURIComponent(selected.building_id)}`)}
-                >
-                  ⬢ open ULPIN view
-                </button>
-              </div>
-              {editingBld ? (
-                <div className="edit-form">
-                  <label>
-                    <span>storeys</span>
-                    <input
-                      type="number" min="1" step="1" value={editDraft.floors}
-                      onChange={(e) => {
-                        const fl = Math.max(1, parseInt(e.target.value) || 1)
-                        setEditDraft({ ...editDraft, floors: fl, height: +(fl * 3).toFixed(2) })
-                      }}
-                    />
-                  </label>
-                  <label>
-                    <span>basements</span>
-                    <input
-                      type="number" min="0" step="1" value={editDraft.basements ?? 0}
-                      onChange={(e) => setEditDraft({ ...editDraft, basements: Math.max(0, parseInt(e.target.value) || 0) })}
-                    />
-                  </label>
-                  <label>
-                    <span>height (m)</span>
-                    <input
-                      type="number" step="0.1" min="0.5" value={editDraft.height}
-                      onChange={(e) => {
-                        const h = parseFloat(e.target.value) || 0
-                        setEditDraft({ ...editDraft, height: e.target.value, floors: Math.max(1, Math.round(h / 3)) })
-                      }}
-                    />
-                  </label>
+          {/* ── surveyor: what to do next ─────────────────────────────── */}
+          {!selected && isSurveyor && work && (
+            <>
+              <section className="sp-card">
+                <h2 className="sp-title">Your work</h2>
+                {modelStatus && (
+                  <p className={`sp-chip ${modelStatus.ready ? 'is-ok' : 'is-bad'}`}
+                    title={modelStatus.ready ? modelStatus.path : modelStatus.reason}>
+                    {modelStatus.ready
+                      ? `Floor-plan model ready (${modelStatus.file})`
+                      : 'No floor-plan model installed. Units will be estimated.'}
+                  </p>
+                )}
+              </section>
 
-                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-                    <span className="tiny muted" style={{ fontWeight: 600, display: 'block', marginBottom: 6 }}>
-                      UPLOAD SPATIAL DATASET (OPTIONAL)
-                    </span>
-                    <label style={{ display: 'block', marginBottom: 6 }}>
-                      <span className="tiny muted">Asset Type</span>
-                      <select
-                        style={{ width: '100%', background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)', padding: '4px 6px', borderRadius: 4, fontSize: 11 }}
-                        value={editDraft.assetType || 'Floor Plan / Architectural CAD'}
-                        onChange={(e) => setEditDraft({ ...editDraft, assetType: e.target.value })}
-                      >
-                        <option value="Floor Plan / Architectural CAD">Floor Plan / Architectural CAD (.dwg, .dxf, .pdf, .svg, .png, .zip)</option>
-                        <option value="LiDAR Point Cloud">LiDAR Point Cloud (.las, .laz, .ply, .pcd)</option>
-                        <option value="Oblique Imagery">Oblique Camera Imagery (.jpg, .tiff, .zip)</option>
-                        <option value="3D Model">3D Model (.gltf, .glb, .obj, .fbx, .ifc)</option>
-                      </select>
-                    </label>
-                    <label style={{ display: 'block', marginBottom: 6 }}>
-                      <span className="tiny muted">File Attachment</span>
-                      <input
-                        type="file"
-                        accept=".dwg,.dxf,.pdf,.svg,.png,.jpg,.jpeg,.tiff,.tif,.zip,.las,.laz,.ply,.pcd,.gltf,.glb,.obj,.fbx,.ifc"
-                        style={{ fontSize: 11, width: '100%', color: 'var(--muted)' }}
-                        onChange={(e) => {
-                          const file = e.target.files[0]
-                          if (file) setEditDraft({ ...editDraft, spatialFile: file })
-                        }}
-                      />
-                    </label>
-                    {editDraft.spatialFile && (
-                      <div className="mono tiny" style={{ color: 'var(--accent)', marginBottom: 6 }}>
-                        Selected: {editDraft.spatialFile.name} ({(editDraft.spatialFile.size / (1024 * 1024)).toFixed(2)} MB)
-                      </div>
-                    )}
-                    <label style={{ display: 'block' }}>
-                      <span className="tiny muted">Proposal Note / Reason</span>
-                      <textarea
-                        rows={2}
-                        placeholder="Detail height change survey notes or verification source…"
-                        style={{ width: '100%', background: 'var(--panel2)', border: '1px solid var(--border)', color: 'var(--text)', padding: '6px', borderRadius: 4, fontSize: 11 }}
-                        value={editDraft.note || ''}
-                        onChange={(e) => setEditDraft({ ...editDraft, note: e.target.value })}
-                      />
-                    </label>
-                  </div>
-
-                  <div className="btn-row" style={{ marginTop: 12 }}>
-                    <button className="btn primary" onClick={saveBuildingEdit}>
-                      {session?.role === 'surveyor' ? 'Submit Proposal' : 'Save Direct Update'}
-                    </button>
-                    <button className="btn" onClick={() => { setEditingBld(false); setEditDraft(null) }}>cancel</button>
-                  </div>
-                </div>
-              ) : canEditBuildings && (
-                <div className="btn-row">
-                  <button
-                    className="btn primary"
-                    style={{ fontWeight: 700 }}
-                    onClick={() => {
-                      setEditDraft({
-                        height: selected.height_m,
-                        floors: selected.stories,
-                        basements: selected.basements || 0,
-                        spatialFile: null,
-                        assetType: 'Floor Plan / Architectural CAD',
-                        note: '',
-                      })
-                      setEditingBld(true)
-                    }}
-                  >
-                    ✏️ Edit Height &amp; Upload Floor Plan
-                  </button>
-                  {isRegistrar && selected.edit_status === 'pending' && (
-                    <button className="btn primary" title="confirm this surveyor edit" onClick={() => confirmBuilding(selected.building_id)}>
-                      ✓ confirm edit
-                    </button>
-                  )}
-                  <button className="btn danger" title="delete this building from PostGIS" onClick={() => removeBuilding(selected.building_id)}>
-                    delete
-                  </button>
-                </div>
-              )}
-
-              {selected.spatial_assets && selected.spatial_assets.length > 0 && (
-                <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-                  <span className="tiny muted" style={{ fontWeight: 600, display: 'block', marginBottom: 6 }}>
-                    ATTACHED SPATIAL DATASETS ({selected.spatial_assets.length})
-                  </span>
-                  {selected.spatial_assets.map((asset, idx) => (
-                    <div key={idx} style={{ padding: '6px 8px', background: 'var(--panel2)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 4 }}>
-                      <div style={{ fontWeight: 600, color: 'var(--accent)', fontSize: 11 }}>📦 {asset.asset_type}</div>
-                      <div className="mono tiny" style={{ color: 'var(--text)' }}>{asset.file_name} ({(asset.file_size / (1024 * 1024)).toFixed(2)} MB)</div>
-                      <div className="muted tiny" style={{ fontSize: 10 }}>Uploaded by {asset.uploaded_by} on {new Date(asset.uploaded_at).toLocaleDateString()}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {selected.edit_status === 'pending' && (
-                <div className="proposed-change">
-                  <h3>proposed change</h3>
-                  {proposedRows.length ? (
-                    <table className="kv">
-                      <tbody>
-                        {proposedRows.map(([field, from, to]) => (
-                          <tr key={field}>
-                            <td>{field}</td>
-                            <td><span className="old-val">{String(from)}</span> → <span className="new-val">{String(to)}</span></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <p className="muted tiny">footprint / spatial proposal — see history below.</p>
-                  )}
-                </div>
-              )}
-              {(selected.edit_history?.length || 0) > 0 && (
-                <ul className="history">
-                  {[...selected.edit_history].reverse().map((h, i) => (
-                    <li key={i}>
-                      <span className="who">{h.by} ({h.role})</span> — {h.change}
-                      <span className="when">{new Date(h.at).toLocaleString()}</span>
+              <section className="sp-card">
+                <h3 className="sp-h3">Needs a floor plan <span className="sp-count is-quiet">{work.needsPlan.length}</span></h3>
+                <p className="sp-muted">Units in these buildings are estimated. Upload the approved plan to extract the real layout. Tallest first.</p>
+                <ul className="sp-list">
+                  {work.needsPlan.slice(0, 6).map((p) => (
+                    <li key={p.building_id}>
+                      <button className="sp-row" onClick={() => focusBuilding(p.building_id)}>
+                        <span>{p.name || p.building_id}</span><span className="sp-muted">{p.stories ?? '?'} storeys</span>
+                      </button>
                     </li>
                   ))}
                 </ul>
+              </section>
+
+              {work.unmeasured > 0 && (
+                <section className="sp-card">
+                  <h3 className="sp-h3">Height not measured <span className="sp-count is-quiet">{work.unmeasured}</span></h3>
+                  <p className="sp-muted">These heights are estimated. Import Google Open Buildings 2.5D heights or run a LiDAR scan to measure them.</p>
+                  <NavLink to="/lidar" className="btn">Run a LiDAR scan</NavLink>
+                </section>
               )}
-            </div>
+
+              <section className="sp-card">
+                <h3 className="sp-h3">Your proposals <span className="sp-count is-quiet">{myProposals.length}</span></h3>
+                {myProposals.length === 0 && work.rejected.length === 0 && (
+                  <p className="sp-muted">Nothing waiting. Height changes you propose appear here until the registrar decides.</p>
+                )}
+                <ul className="sp-list">
+                  {myProposals.map((p) => (
+                    <li key={p.id}>
+                      <button className="sp-row" onClick={() => focusBuilding(p.building_id)}>
+                        <span>{nameOf(p.building_id)}</span><span className="sp-muted">Waiting</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {work.rejected.length > 0 && (
+                  <>
+                    <p className="sp-muted">Recently rejected</p>
+                    <ul className="sp-history">
+                      {work.rejected.map((r, i) => (
+                        <li key={i}>
+                          <button className="sp-link" onClick={() => focusBuilding(r.building_id)}>{nameOf(r.building_id)}</button>
+                          {': '}{r.change.replace(/^Rejected Surveyor proposal:\s*/, '')}
+                          <time>{r.by}, {when(r.at)}</time>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </section>
+            </>
           )}
+
+          {/* ── browse scan areas (secondary) ─────────────────────────── */}
+          <details className="sp-card sp-browse" open={!!selCountry}>
+            <summary>Browse scan areas</summary>
+            {selRegion ? (
+              <button className="btn tiny" onClick={() => setSelRegion(null)}>← {selCountry}</button>
+            ) : selCountry ? (
+              <button className="btn tiny" onClick={() => { setSelCountry(null); setSelRegion(null) }}>← all countries</button>
+            ) : null}
+
+            {!selCountry && countryTree.map((c) => (
+              <button key={c.name} className="sp-row" disabled={c.name === '⏳ locating…'} onClick={() => setSelCountry(c.name)}>
+                <span>{c.name}</span>
+                <span className="sp-muted">{c.name === '⏳ locating…' ? 'locating…' : `${c.buildings} buildings`}</span>
+              </button>
+            ))}
+
+            {selCountry && !selRegion && countryTree.find((x) => x.name === selCountry)?.regions.map((r) => (
+              <button key={r.key} className="sp-row" onClick={() => setSelRegion(r.key)}>
+                <span>{r.name}</span><span className="sp-muted">{r.buildings} buildings</span>
+              </button>
+            ))}
+
+            {selCountry && selRegion && countryTree.find((x) => x.name === selCountry)?.regions.find((x) => x.key === selRegion)?.scans.map((sc) => (
+              <div key={sc.sid} className="sp-actions" style={{ flexWrap: 'nowrap' }}>
+                <button className="sp-row" onClick={() => focusSession(sc.sid)} title={sc.label}>
+                  <span>{sc.label}</span><span className="sp-muted">{focusSid === sc.sid ? 'showing' : `${sc.count}`}</span>
+                </button>
+                {isRegistrar && (
+                  <button className="sp-icon" title="Delete this scan and its buildings"
+                    onClick={() => { if (window.confirm(`Delete scan "${sc.label}" and its ${sc.count} buildings?`)) removeSession(sc.sid) }}>×</button>
+                )}
+              </div>
+            ))}
+
+            {stats && (
+              <p className="sp-muted">
+                {stats.n} buildings in view, {stats.fromLidar} with a measured height, tallest {stats.tallest} m.
+              </p>
+            )}
+          </details>
         </aside>
       </main>
     </div>

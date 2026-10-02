@@ -1,49 +1,76 @@
-# Avani — Demo Build (frontend only, no backend)
+# Avani — Running locally
 
-The FastAPI/PostGIS backend, Electron desktop shell and LiDAR pipeline were removed
-for this demo. Everything now runs from the frontend alone — no Python, no Node
-server beyond Vite, no database.
+Frontend (React + Vite) talks to the FastAPI backend; every record — buildings,
+scan sessions, ULPIN units, surveyor proposals, unit corrections, citizen
+complaints — lives in PostgreSQL/PostGIS.
 
-## What you get
+## 1. Database
 
-- **Demo city**: ~6000 real building footprints from **Chennai · T. Nagar /
-  Mambalam** (OpenStreetMap via Overpass), baked into
-  `3d_map/frontend/src/data/chennai_buildings.json`. Buildings without OSM level
-  tags get plausible storey counts derived from their building type — orange =
-  estimated, blue = tagged in OSM.
-- **3D map** with per-storey extrusions: every building is split into one
-  coloured slice per floor (alternating light/dark banding so each storey reads
-  clearly), plus ground cast-shadows.
-- **ULPIN units view**: pick a building, generate 2×2 units per floor — all
-  computed client-side.
-- **Login**: demo-only, any prefilled credentials pass (ramesh / priya / arun).
-- Your edits, deletions and generated units persist to `localStorage`, so the
-  demo stays interactive across refreshes. Clear the site's storage to restore
-  the baked city.
+PostgreSQL with the PostGIS extension, reachable at
+`postgresql://postgres:postgres@localhost:5432/layerd` (override with
+`DATABASE_URL`). Tables are created automatically on first connection.
 
-## Run it
+Without PostgreSQL the backend falls back to JSON files in `3d_map/backend/data/`
+for buildings and units (corrections and complaints need PostgreSQL).
+
+## 2. Backend
+
+```powershell
+cd 3d_map\backend
+pip install -r requirements.txt
+python seed_chennai.py      # once: loads Chennai · T. Nagar (6,625 buildings) + units for 40 of them
+uvicorn app.main:app --port 8000
+```
+
+## 3. Frontend
 
 ```powershell
 cd 3d_map\frontend
-npm install        # once
-npm run dev        # http://localhost:5173
+npm install
+npm run dev                 # http://localhost:5173 — /api is proxied to :8000
 ```
 
-That's it — one terminal, no database. `npm run build` produces a static
-`dist/` you can host anywhere.
+Set `VITE_API_BASE_URL` at build time to point a deployed frontend at a separate backend host.
 
-## Routes
+## Floor-plan model (unit extraction)
 
-| URL | Description |
-|-----|-------------|
-| `/` | Landing page (redirects to `/dashboard` if logged in) |
-| `/login?role=citizen|surveyor|registrar` | Login for the chosen role (demo — always succeeds) |
-| `/dashboard` | 3D city view of the Chennai demo dataset |
-| `/ulpin` | 3D unit tree — floors, ULPINs, owners per building |
+Copy your trained YOLO segmentation weights to `3d_map/models/units.pt`
+(or set `YOLO_WEIGHTS=C:\path	o\model.pt`) and restart the backend.
 
-## Rebuilding the dataset (optional)
+- `GET /api/lidar/segmentation/status` shows whether the model loaded and its class names;
+  surveyors see the same status in *Your work* and in the unit editor.
+- By default every class the model predicts counts as a unit. If it also predicts
+  rooms, walls or doors, list just the unit classes: `YOLO_UNIT_CLASSES=apartment,shop`.
+- `YOLO_CONF` (default 0.35) is the minimum detection confidence.
+- The stock COCO checkpoint in `yolo-v11-wt/` is refused — it detects people and cars, not units.
+- Without a model or a plan image, units are *estimated* and labelled as such.
 
-`convert_chennai.cjs` (repo root) converts a raw Overpass dump
-(`chennai_raw.json`) into the baked JSON. To grab fresh data for another city,
-query `way["building"]` + `relation["building"]` with `out tags geom` from
-https://overpass-api.de and run `node convert_chennai.cjs`.
+## Real building heights (Google Open Buildings 2.5D)
+
+```powershell
+pip install earthengine-api
+earthengine authenticate                                       # your Google account
+cd 3d_mapackend
+python heights_open_buildings.py --project YOUR_GCP_PROJECT --dry-run
+python heights_open_buildings.py --project YOUR_GCP_PROJECT
+```
+
+Needs an Earth Engine-enabled Google Cloud project. Takes the median 2023
+`building_height` inside each footprint; LiDAR-measured and approved heights are kept.
+
+## Accounts (demo-grade auth)
+
+| Role | Username | Password |
+|------|----------|----------|
+| Citizen | ramesh | citizen123 |
+| Citizen (small holding) | kavitha | kavitha123 |
+| Surveyor | priya | survey123 |
+| Registrar | arun | register123 |
+
+Unit ownership comes from the backend's deterministic owner registry
+(`app/ulpin.py`): each generated unit is assigned to one of 12 demo owners.
+
+## Rebuilding the Chennai dataset
+
+`scripts/convert_chennai.cjs` turns a raw Overpass dump (`chennai_raw.json`) into
+`3d_map/backend/seed/chennai_buildings.json`; re-run `python seed_chennai.py` afterwards.

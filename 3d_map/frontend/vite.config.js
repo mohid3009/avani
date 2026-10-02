@@ -23,7 +23,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/lidar': {
+      // FastAPI serves every route under /api as well (see backend main.py)
+      '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
       },

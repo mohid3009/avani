@@ -1,13 +1,3 @@
-// ── Demo identity constants ───────────────────────────────────────────────────
-// Shared by App (switchRole), LoginRoute, and any future component that needs
-// to construct a session object for a given role without a real backend.
-
-export const DEMO_USERS = {
-  citizen:   { username: 'citizen1',   name: 'Citizen 1',   role: 'citizen' },
-  surveyor:  { username: 'surveyor1',  name: 'Surveyor 1',  role: 'surveyor' },
-  registrar: { username: 'registrar1', name: 'Registrar 1', role: 'registrar' },
-}
-
 export const ROLE_LABELS = {
   citizen:   'Citizen',
   surveyor:  'Surveyor',

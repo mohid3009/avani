@@ -10,7 +10,7 @@ import QRBlock from '../components/ui/QRBlock.jsx'
 import MapInset from '../components/ui/MapInset.jsx'
 import CubeMark from '../components/CubeMark.jsx'
 import IndianEmblem from '../components/ui/IndianEmblem.jsx'
-import { getUnit } from '../mockData.js'
+import { useUnit } from '../portalData.js'
 
 const ordinal = (n) => {
   const s = ['th', 'st', 'nd', 'rd']
@@ -26,7 +26,7 @@ export default function PropertyPassport() {
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState('specs') // 'specs' | 'encumbrance' | 'ledger'
 
-  const unit = getUnit(id)
+  const { data: unit, loading } = useUnit(id)
 
   const copyUlpin = () => {
     if (!unit) return
@@ -35,6 +35,7 @@ export default function PropertyPassport() {
     setTimeout(() => setCopied(false), 2200)
   }
 
+  if (loading) return <div className="loading muted">loading passport…</div>
   if (!unit) {
     return (
       <div className="max-w-[720px] mx-auto p-6">
@@ -79,7 +80,7 @@ export default function PropertyPassport() {
             className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${
               viewMode === 'deed'
                 ? 'bg-white text-[#8B6508] shadow-xs'
-                : 'text-[#64748B] hover:text-[#0F172A]'
+                : 'text-[#334155] hover:text-[#0F172A]'
             }`}
           >
             <Stamp size={13} /> Formal E-Stamp Deed
@@ -90,8 +91,8 @@ export default function PropertyPassport() {
             aria-pressed={viewMode === 'dashboard'}
             className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all ${
               viewMode === 'dashboard'
-                ? 'bg-white text-[#4C5BD4] shadow-xs'
-                : 'text-[#64748B] hover:text-[#0F172A]'
+                ? 'bg-white text-[#176B55] shadow-xs'
+                : 'text-[#334155] hover:text-[#0F172A]'
             }`}
           >
             <Box size={13} /> Interactive 3D Passport
@@ -359,11 +360,11 @@ export default function PropertyPassport() {
                     Vertical 3D volumetric boundaries minted and registered to {unit.owner}
                   </div>
                   <div className="text-[10px] text-[#64748B]">
-                    Prev Hash: <span className="text-[#4C5BD4]">9e8a71b2...4401</span> · Block Hash: <span className="text-[#166534] font-bold">d7204f1e...b891</span> · Validator: PKI-CDAC-TN-991
+                    Prev Hash: <span className="text-[#176B55]">9e8a71b2...4401</span> · Block Hash: <span className="text-[#166534] font-bold">d7204f1e...b891</span> · Validator: PKI-CDAC-TN-991
                   </div>
                 </div>
 
-                <div className="p-2.5 bg-white rounded border border-[#E2E8F0] border-l-4 border-l-[#4C5BD4]">
+                <div className="p-2.5 bg-white rounded border border-[#E2E8F0] border-l-4 border-l-[#176B55]">
                   <div className="flex items-center justify-between text-[11px] text-[#554114] mb-1 font-sans">
                     <span className="font-bold text-[#1E293B]">BLOCK #2 · SPATIAL SURVEY CERTIFICATION</span>
                     <span>2026-08-20 09:30 UTC</span>
@@ -372,7 +373,7 @@ export default function PropertyPassport() {
                     OpenStreetMap &amp; 3D LiDAR footprint topology validated with 0 volumetric overlaps
                   </div>
                   <div className="text-[10px] text-[#64748B]">
-                    Prev Hash: <span className="text-[#4C5BD4]">1a2b3c4d...9981</span> · Block Hash: <span className="text-[#4C5BD4] font-bold">9e8a71b2...4401</span> · Surveyor: TN-SURV-309
+                    Prev Hash: <span className="text-[#176B55]">1a2b3c4d...9981</span> · Block Hash: <span className="text-[#176B55] font-bold">9e8a71b2...4401</span> · Surveyor: TN-SURV-309
                   </div>
                 </div>
 
@@ -482,7 +483,7 @@ export default function PropertyPassport() {
                   3D ULPIN (National Spatial ID)
                 </span>
                 <div className="flex items-center gap-2">
-                  <span className="font-id text-[13px] font-semibold text-[#4C5BD4] min-w-0 break-all">
+                  <span className="font-id text-[13px] font-semibold text-[#176B55] min-w-0 break-all">
                     {showFull ? unit.ulpin : `${unit.ulpin.slice(0, 22)}…`}
                   </span>
                   <button
@@ -495,7 +496,7 @@ export default function PropertyPassport() {
                 </div>
                 <button
                   onClick={() => setShowFull(!showFull)}
-                  className="text-[11px] text-[#4C5BD4] hover:underline mt-1 font-medium"
+                  className="text-[11px] text-[#176B55] hover:underline mt-1 font-medium"
                 >
                   {showFull ? 'Show condensed' : 'Show full national key'}
                 </button>
@@ -533,7 +534,7 @@ export default function PropertyPassport() {
               onClick={() => setActiveTab('specs')}
               className={`pb-3 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 border-b-2 transition-all ${
                 activeTab === 'specs'
-                  ? 'border-[#4C5BD4] text-[#4C5BD4]'
+                  ? 'border-[#176B55] text-[#176B55]'
                   : 'border-transparent text-[#1C2530] hover:text-[#1C2530]'
               }`}
             >
@@ -543,7 +544,7 @@ export default function PropertyPassport() {
               onClick={() => setActiveTab('encumbrance')}
               className={`pb-3 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 border-b-2 transition-all ${
                 activeTab === 'encumbrance'
-                  ? 'border-[#4C5BD4] text-[#4C5BD4]'
+                  ? 'border-[#176B55] text-[#176B55]'
                   : 'border-transparent text-[#1C2530] hover:text-[#1C2530]'
               }`}
             >
@@ -553,7 +554,7 @@ export default function PropertyPassport() {
               onClick={() => setActiveTab('ledger')}
               className={`pb-3 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 border-b-2 transition-all ${
                 activeTab === 'ledger'
-                  ? 'border-[#4C5BD4] text-[#4C5BD4]'
+                  ? 'border-[#176B55] text-[#176B55]'
                   : 'border-transparent text-[#1C2530] hover:text-[#1C2530]'
               }`}
             >
@@ -589,7 +590,7 @@ export default function PropertyPassport() {
 
                 {/* Map Inset */}
                 <div>
-                  <MapInset highlightUnit ulpin={b.baseUlpin} />
+                  <MapInset highlightUnit geometry={b.feature.geometry} ulpin={b.baseUlpin} />
                 </div>
               </div>
             )}
@@ -666,13 +667,13 @@ export default function PropertyPassport() {
                         Vertical volumetric boundaries minted and assigned to {unit.owner}
                       </div>
                       <div className="text-[11px] text-[#1C2530]">
-                        Prev Hash: <span className="text-[#4C5BD4]">9e8a71...4401</span> · Block Hash:{' '}
+                        Prev Hash: <span className="text-[#176B55]">9e8a71...4401</span> · Block Hash:{' '}
                         <span className="text-[#1B7A4A]">d7204f...b891</span>
                       </div>
                     </div>
 
                     {/* Block 2 */}
-                    <div className="p-3 bg-white rounded-[8px] border border-[#E4E7EC] border-l-4 border-l-[#4C5BD4]">
+                    <div className="p-3 bg-white rounded-[8px] border border-[#E4E7EC] border-l-4 border-l-[#176B55]">
                       <div className="flex items-center justify-between text-[11px] text-[#1C2530] mb-1">
                         <span className="font-bold text-[#1C2530]">BLOCK #2 · SPATIAL SURVEY CERTIFICATION</span>
                         <span>2026-08-20 09:30 UTC</span>
@@ -682,7 +683,7 @@ export default function PropertyPassport() {
                       </div>
                       <div className="text-[11px] text-[#1C2530]">
                         Prev Hash: <span className="text-[#1A2B3C]">1a2b3c...9981</span> · Block Hash:{' '}
-                        <span className="text-[#4C5BD4]">9e8a71...4401</span>
+                        <span className="text-[#176B55]">9e8a71...4401</span>
                       </div>
                     </div>
 
@@ -697,7 +698,7 @@ export default function PropertyPassport() {
                       </div>
                       <div className="text-[11px] text-[#1C2530]">
                         Prev Hash: <span className="text-[#1C2530]">000000...0000</span> · Block Hash:{' '}
-                        <span className="text-[#4C5BD4]">1a2b3c...9981</span>
+                        <span className="text-[#176B55]">1a2b3c...9981</span>
                       </div>
                     </div>
                   </div>
@@ -710,7 +711,7 @@ export default function PropertyPassport() {
           <div className="bg-[#F9FAFB] border-t border-[#E4E7EC] p-5 flex items-center justify-between gap-3 flex-wrap">
             <Link
               to={`/portal/upc/${b.id}`}
-              className="text-xs font-semibold text-[#4C5BD4] hover:underline inline-flex items-center gap-1"
+              className="text-xs font-semibold text-[#176B55] hover:underline inline-flex items-center gap-1"
             >
               Part of {b.name} parcel record <ChevronRight size={13} />
             </Link>

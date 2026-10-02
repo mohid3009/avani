@@ -10,10 +10,9 @@ import { ROLE_LABELS } from '../../constants.js'
  * Props:
  *   session      – current session object ({ name, role }) or null
  *   onLogout     – called when the user clicks Log out
- *   onSwitchRole – called with the new role string when the demo role switcher is used
  *   children     – optional slot for extra content (e.g. registrar search box)
  */
-export default function Topbar({ session, onLogout, onSwitchRole, activeLanguage = 'English', onLanguageChange, children }) {
+export default function Topbar({ session, onLogout, activeLanguage = 'English', onLanguageChange, children }) {
   const isCitizen   = session?.role === 'citizen'
   const isRegistrar = session?.role === 'registrar'
   const isSurveyor  = session?.role === 'surveyor'
@@ -145,46 +144,20 @@ export default function Topbar({ session, onLogout, onSwitchRole, activeLanguage
         </label>
       )}
 
-      {/* Interactive Role Switcher */}
-      <div className="role-switcher-wrap" aria-label="Demo Role Switcher">
-        <span className="role-label-text">Role:</span>
-        <div className="role-pill-group">
-          <button
-            type="button"
-            className={`role-pill-btn role-pill-citizen ${session?.role === 'citizen' ? 'active' : ''}`}
-            onClick={() => onSwitchRole?.('citizen')}
-            title="Switch to Citizen View"
-          >
-            👤 Citizen
-          </button>
-          <button
-            type="button"
-            className={`role-pill-btn role-pill-registrar ${session?.role === 'registrar' ? 'active' : ''}`}
-            onClick={() => onSwitchRole?.('registrar')}
-            title="Switch to Registrar View"
-          >
-            🏛️ Registrar
-          </button>
-          <button
-            type="button"
-            className={`role-pill-btn role-pill-surveyor ${session?.role === 'surveyor' ? 'active' : ''}`}
-            onClick={() => onSwitchRole?.('surveyor')}
-            title="Switch to Surveyor View"
-          >
-            📐 Surveyor
-          </button>
-        </div>
-      </div>
-
-      {/* Account access stays compact; full actions live in the left sidebar. */}
-      <button
-        className="avatar-btn"
-        onClick={() => navigate('/portal/profile')}
-        title="Open profile and settings"
-        aria-label={`Open profile for ${displayName}, ${roleName}`}
-      >
-        {initials}
-      </button>
+      {/* One portal per sign-in: no role switching, staff sign out here. */}
+      <span className="topbar-role" title={`Signed in as ${roleName}`}>{roleName}</span>
+      {isCitizen ? (
+        <button
+          className="avatar-btn"
+          onClick={() => navigate('/portal/profile')}
+          title="Open profile and settings"
+          aria-label={`Open profile for ${displayName}, ${roleName}`}
+        >
+          {initials}
+        </button>
+      ) : (
+        <button className="btn" onClick={onLogout} title={`Signed in as ${displayName}`}>Sign out</button>
+      )}
     </header>
   )
 }

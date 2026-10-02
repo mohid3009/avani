@@ -3,8 +3,31 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
-import { getSavedBuildings, fetchUnits, generateUnits, generateFloorUnits, deleteUnits, saveBuildingFeature } from '../api.js'
+import { getSavedBuildings, fetchUnits, generateUnits, generateFloorUnits, deleteUnits, saveBuildingFeature, segmentationStatus } from '../api.js'
 import BuildingsMap from './BuildingsMap.jsx'
+import './staff.css'
+
+const floorName = (f) => (f < 0 ? `Basement ${-f}` : `Floor ${f}`)
+const fromModel = (u) => u.segmentation === 'model'
+
+// drag-and-drop or click-to-pick image field with a preview
+function PlanDrop({ file, onFile, label }) {
+  const [over, setOver] = useState(false)
+  const url = useMemo(() => (file ? URL.createObjectURL(file) : null), [file])
+  useEffect(() => () => url && URL.revokeObjectURL(url), [url])
+  return (
+    <label
+      className={`sp-drop${over ? ' is-over' : ''}`}
+      onDragOver={(e) => { e.preventDefault(); setOver(true) }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); onFile(e.dataTransfer.files[0] || null) }}
+    >
+      <input type="file" accept="image/png,image/jpeg" onChange={(e) => onFile(e.target.files[0] || null)} />
+      {url ? <img src={url} alt="Selected floor plan" /> : <span>{label}</span>}
+      {file && <span className="sp-muted">{file.name} (click to change)</span>}
+    </label>
+  )
+}
 
 const FH = 3          // storey height used by the generator (m)
 const FLOOR_GAP = 0.7 // vertical gap between floors (m) — keeps every level visible in 3D
@@ -63,9 +86,15 @@ export default function UlpinView({ session }) {
   const [planFile, setPlanFile]   = useState(null)
   const [floorPlanFile, setFloorPlanFile] = useState(null)
   const [busy, setBusy]           = useState(false)
-  const [msg, setMsg]             = useState(null)
   const [err, setErr]             = useState(null)
   const [query, setQuery]         = useState('')
+  const [model, setModel]         = useState(null)
+  const [result, setResult]       = useState(null) // last extraction: { source, note, unit_count, conflicts }
+  const [floorTarget, setFloorTarget] = useState(1)
+
+  useEffect(() => {
+    if (canManage) segmentationStatus().then(setModel).catch(() => setModel({ ready: false, reason: 'could not reach the server' }))
+  }, [canManage])
 
   useEffect(() => {
     getSavedBuildings()
@@ -92,9 +121,15 @@ export default function UlpinView({ session }) {
     setUnits([])
     setSelUlpin(null)
     setFloorPlanFile(null)
+    setPlanFile(null)
+    setResult(null)
     setBusy(false)
     setErr(null)
-    setMsg(null)
+    const p = buildings.find((b) => b.properties.building_id === selId)?.properties
+    if (p) {
+      setFloors(Math.max(1, p.stories || 1))
+      setBasements(Math.max(0, p.basements || 0))
+    }
     if (selId) {
       setBusy(true)
       fetchUnits(selId)
@@ -102,7 +137,7 @@ export default function UlpinView({ session }) {
         .catch((e) => setErr(e.message))
         .finally(() => setBusy(false))
     }
-  }, [selId])
+  }, [selId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const importOvertureBuilding = async (feature) => {
     // We synthesize a local ID and save it via the API
@@ -147,23 +182,23 @@ export default function UlpinView({ session }) {
 
   const generate = () => {
     if (!selId) return
-    setBusy(true); setErr(null); setMsg(null)
+    setBusy(true); setErr(null)
     generateUnits(selId, { floors, basements, floorHeight: fh, planFile })
       .then((r) => {
         setUnits(r.units)
-        setMsg(`${r.unit_count} units generated via ${r.segmentation} segmentation — base ULPIN ${r.base_ulpin}`)
+        setResult({ ...r, scope: 'building' })
         setBusy(false)
       })
       .catch((e) => { setErr(e.message); setBusy(false) })
   }
 
   const generateFloor = () => {
-    if (!selId || !selSlab) return
-    setBusy(true); setErr(null); setMsg(null)
-    generateFloorUnits(selId, selSlab.floor_index, floorPlanFile)
+    if (!selId || !floorPlanFile) return
+    setBusy(true); setErr(null)
+    generateFloorUnits(selId, floorTarget, floorPlanFile)
       .then((r) => {
         setUnits(r.units)
-        setMsg(`Floor ${selSlab.floor_index} regenerated via ${r.segmentation} segmentation`)
+        setResult({ ...r, scope: floorName(floorTarget) })
         setBusy(false)
         setFloorPlanFile(null)
       })
@@ -171,8 +206,9 @@ export default function UlpinView({ session }) {
   }
 
   const clear = () => {
+    if (!window.confirm('Remove every unit of this building? Owners and corrections on them are lost.')) return
     deleteUnits(selId)
-      .then(() => { setUnits([]); setSelUlpin(null); setMsg('units cleared') })
+      .then(() => { setUnits([]); setSelUlpin(null); setResult(null) })
       .catch(() => {})
   }
 
@@ -212,7 +248,6 @@ export default function UlpinView({ session }) {
   }, [selected, units.length])
 
   const displayUnits = units.length ? units : mockSlabs
-  const selSlab      = mockSlabs.find((s) => s.unit_ulpin === selUlpin) || null
   const maxFloor     = displayUnits.reduce((m, u) => Math.max(m, u.floor_index), 1)
   const minFloor     = displayUnits.reduce((m, u) => Math.min(m, u.floor_index), 0)
   const totalH       = (maxFloor - minFloor + 2) * (FH + FLOOR_GAP)
@@ -314,180 +349,169 @@ export default function UlpinView({ session }) {
 
       <aside className="sidebar">
         {!selId && (
-          <div className="panel-section">
-            <h3>3D ULPIN explorer</h3>
+          <section className="sp-card">
+            <h2 className="sp-title">Unit editor</h2>
             {buildings.length === 0 ? (
               <>
-                <p className="muted tiny">
-                  no saved buildings yet — run a LiDAR scan first, then come back here to open a
-                  building in 3D and mint its ULPIN unit tree.
-                </p>
-                <div className="btn-row">
-                  {canManage && (
-                    <Link to="/lidar" className="btn primary">
-                      run a LiDAR scan
-                    </Link>
-                  )}
-                  <Link to="/dashboard" className="btn">
-                    open dashboard
-                  </Link>
+                <p className="sp-muted">No saved buildings yet. Run a scan first, then open a building here to extract its units.</p>
+                <div className="sp-actions">
+                  {canManage && <Link to="/lidar" className="btn primary">Run a LiDAR scan</Link>}
+                  <Link to="/dashboard" className="btn">Open dashboard</Link>
                 </div>
               </>
             ) : (
               <>
-                <p className="muted tiny">
-                  pick a building below or click it on the map — it opens in 3D with all of its
-                  sections, ULPINs, owners and details.
-                </p>
-                <input
-                  className="search"
-                  placeholder="search by name or id…"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-                <div className="picker-list">
-                  {candidates.map((p) => (
-                    <div
-                      key={p.building_id}
-                      className="nav-row"
-                      onClick={() => selectBuilding(p.building_id)}
-                    >
-                      <span className="session-label" title={p.building_id}>
-                        {p.name || p.building_id}
-                      </span>
-                      <span className="muted tiny">{p.stories ?? '—'} str</span>
-                      <span className="enter-hint tiny">open →</span>
-                    </div>
+                <p className="sp-muted">Pick a building on the map or search for it below.</p>
+                <label className="sp-field">Search
+                  <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="building name or id" />
+                </label>
+                <ul className="sp-list picker-list">
+                  {candidates.slice(0, 50).map((p) => (
+                    <li key={p.building_id}>
+                      <button className="sp-row" onClick={() => selectBuilding(p.building_id)} title={p.building_id}>
+                        <span>{p.name || p.building_id}</span><span className="sp-muted">{p.stories ?? '?'} storeys</span>
+                      </button>
+                    </li>
                   ))}
-                  {!candidates.length && (
-                    <p className="muted tiny">no building matches "{query}".</p>
-                  )}
-                </div>
+                  {!candidates.length && <li className="sp-muted">No building matches "{query}".</li>}
+                </ul>
               </>
             )}
-          </div>
+          </section>
         )}
 
-        {selected && (
-          <div className="panel-section">
-            <h3>base ULPIN</h3>
-            <p className="ulpin">{baseUlpin || '— generate units to mint the base ULPIN —'}</p>
-            {canManage && (
-              <>
-                <div className="edit-form">
-                  <label>
-                    <span>floors</span>
-                    <input type="number" min="1" max="60" value={floors} onChange={(e) => setFloors(Math.max(1, parseInt(e.target.value) || 1))} />
-                  </label>
-                  <label>
-                    <span>basements</span>
-                    <input type="number" min="0" max="6" value={basements} onChange={(e) => setBasements(Math.max(0, parseInt(e.target.value) || 0))} />
-                  </label>
-                  <label>
-                    <span>floor h (m)</span>
-                    <input type="number" min="0.5" step="0.1" value={fh} onChange={(e) => setFh(Math.max(0.5, parseFloat(e.target.value) || 3))} />
-                  </label>
+        {selected && canManage && (
+          <section className="sp-card">
+            <div className="sp-card-head">
+              <div>
+                <h2 className="sp-title">{selected.properties.name || selId}</h2>
+                <p className="sp-muted mono">{baseUlpin ? `Base ULPIN ${baseUlpin}` : selId}</p>
+              </div>
+            </div>
+
+            <ol className="sp-steps" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+              <li className="sp-step is-done">
+                <span className="sp-step-no">1</span>
+                <div className="sp-step-body">
+                  <h3 className="sp-h3">Check the building</h3>
+                  <div className="sp-form"><div className="sp-grid">
+                    <label className="sp-field">Floors
+                      <input type="number" min="1" max="60" value={floors} onChange={(e) => setFloors(Math.max(1, parseInt(e.target.value) || 1))} />
+                    </label>
+                    <label className="sp-field">Basements
+                      <input type="number" min="0" max="6" value={basements} onChange={(e) => setBasements(Math.max(0, parseInt(e.target.value) || 0))} />
+                    </label>
+                    <label className="sp-field">Floor height
+                      <input type="number" min="0.5" step="0.1" value={fh} onChange={(e) => setFh(Math.max(0.5, parseFloat(e.target.value) || 3))} />
+                    </label>
+                  </div></div>
+                  <p className="sp-muted">Prefilled from the building record.</p>
                 </div>
-                <label className="upload-field">
-                  <span>floor plan image (YOLOv11-seg)</span>
-                  <input type="file" accept=".png,.jpg,.jpeg" onChange={(e) => setPlanFile(e.target.files[0] || null)} />
-                </label>
-                <div className="btn-row">
-                  <button className="btn primary" disabled={busy} onClick={generate}>
-                    {busy ? 'generating…' : 'generate units'}
-                  </button>
-                  {units.length > 0 && (
-                    <button className="btn danger" onClick={clear}>clear units</button>
+              </li>
+
+              <li className={`sp-step${planFile ? ' is-done' : ''}`}>
+                <span className="sp-step-no">2</span>
+                <div className="sp-step-body">
+                  <h3 className="sp-h3">Add the floor plan</h3>
+                  {model && (
+                    <p className={`sp-chip ${model.ready ? 'is-ok' : 'is-bad'}`} title={model.ready ? model.path : model.reason}>
+                      {model.ready ? `Model ready: ${model.file}` : 'No floor-plan model installed'}
+                    </p>
                   )}
+                  <PlanDrop file={planFile} onFile={setPlanFile} label="Drop the approved floor plan here (PNG or JPG), or click to choose" />
+                  <p className="sp-muted">The same layout is used on every floor. If one floor differs, fix it below after extracting.</p>
                 </div>
-                {msg && <p className="all-clear tiny">{msg}</p>}
-                {err && <div className="error mono tiny">{err}</div>}
-              </>
+              </li>
+
+              <li className={`sp-step${result ? ' is-done' : ''}`}>
+                <span className="sp-step-no">3</span>
+                <div className="sp-step-body">
+                  <h3 className="sp-h3">Extract the units</h3>
+                  <button className="btn primary sp-wide" disabled={busy} onClick={generate}>
+                    {busy ? 'Working…' : planFile ? 'Extract units from plan' : 'Estimate units (no plan)'}
+                  </button>
+                  {units.length > 0 && !busy && <p className="sp-muted">This replaces the current {units.length} units.</p>}
+                </div>
+              </li>
+            </ol>
+
+            {result && (
+              <div className={result.segmentation === 'model' ? 'sp-chip is-ok' : 'sp-callout'} style={{ alignSelf: 'stretch' }}>
+                {result.segmentation === 'model'
+                  ? `${result.unit_count} units extracted from the plan${result.scope === 'building' ? '' : ` for ${result.scope}`}.${result.conflicts ? ` ${result.conflicts} overlap, check them below.` : ' No overlaps.'}`
+                  : <><b>Units were estimated, not extracted.</b><span className="sp-muted">Reason: {result.note}</span></>}
+              </div>
             )}
-          </div>
+            {err && <p className="sp-chip is-bad">{err}</p>}
+            {units.length > 0 && <button className="sp-danger" onClick={clear}>Remove all units</button>}
+          </section>
+        )}
+
+        {selected && canManage && units.length > 0 && (
+          <section className="sp-card">
+            <h3 className="sp-h3">One floor is different?</h3>
+            <label className="sp-field">Floor
+              <select value={floorTarget} onChange={(e) => setFloorTarget(parseInt(e.target.value))}>
+                {byFloor.map(([f]) => <option key={f} value={f}>{floorName(f)}</option>)}
+              </select>
+            </label>
+            <PlanDrop file={floorPlanFile} onFile={setFloorPlanFile} label={`Drop the plan for ${floorName(floorTarget)}`} />
+            <button className="btn" disabled={busy || !floorPlanFile} onClick={generateFloor}>Re-extract {floorName(floorTarget)}</button>
+          </section>
         )}
 
         {byFloor.length > 0 && (
-          <div className="panel-section">
-            <h3>units ({units.length})</h3>
-            {byFloor.map(([floor, us]) => (
-              <div key={floor}>
-                <div className="ulpin-floor-head">
-                  {floor < 0 ? `basement ${-floor}` : `floor ${floor}`}
-                </div>
-                {us.map((u) => (
-                  <div
-                    key={u.unit_ulpin}
-                    className={`nav-row ${selUlpin === u.unit_ulpin ? 'active' : ''}`}
-                    onClick={() => setSelUlpin(u.unit_ulpin)}
-                  >
-                    <span className="session-label mono tiny" title={u.unit_ulpin}>
-                      {u.unit_ulpin}
+          <section className="sp-card">
+            <h3 className="sp-h3">Units <span className="sp-count is-quiet">{units.length}</span></h3>
+            {byFloor.map(([floor, us]) => {
+              const modelUnits = us.filter(fromModel)
+              const conflicts = us.filter((u) => u.validation_status === 'conflict').length
+              const conf = modelUnits.length ? Math.round(100 * modelUnits.reduce((s, u) => s + (u.confidence || 0), 0) / modelUnits.length) : null
+              return (
+                <div key={floor} className="sp-block" style={{ paddingTop: 8 }}>
+                  <p className="sp-text" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <b>{floorName(floor)}</b>
+                    <span className={`sp-badge ${conflicts ? 'is-bad' : modelUnits.length ? 'is-model' : ''}`}>
+                      {conflicts ? `${conflicts} overlap` : modelUnits.length ? `from plan, ${conf}% sure` : 'estimated'}
                     </span>
-                    <span className="muted tiny">{u.owner_name}</span>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
+                  </p>
+                  <ul className="sp-list">
+                    {us.map((u) => (
+                      <li key={u.unit_ulpin}>
+                        <button className="sp-row" onClick={() => setSelUlpin(u.unit_ulpin)}
+                          style={selUlpin === u.unit_ulpin ? { borderColor: 'var(--accent)' } : undefined} title={u.unit_ulpin}>
+                          <span>Unit {u.unit_no}, {Math.round(u.area_sqm)} m²</span>
+                          <span className="sp-muted">{u.owner_name}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )
+            })}
+          </section>
         )}
 
         {selUnit && (
-          <div className="panel-section">
-            <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              unit details
-              {selUnit.validation_status === 'conflict' && (
-                <span style={{ background: 'var(--danger,#e05)', color: '#fff', padding: '2px 6px', borderRadius: 4, fontSize: 11 }}>
-                  o! TOPOLOGY CONFLICT
-                </span>
-              )}
-            </h3>
-            <table className="kv">
-              <tbody>
-                <tr><td>ULPIN</td><td className="mono">{selUnit.unit_ulpin}</td></tr>
-                <tr><td>floor</td><td>{selUnit.floor_index < 0 ? `basement ${-selUnit.floor_index}` : `floor ${selUnit.floor_index}`}</td></tr>
-                <tr><td>unit no.</td><td>U{selUnit.unit_no}</td></tr>
-                <tr><td>area</td><td>{selUnit.area_sqm} m²</td></tr>
-                <tr><td>rights</td><td>{selUnit.rights_type}</td></tr>
-                <tr><td>owner</td><td>{selUnit.owner_name}</td></tr>
-                <tr><td>owner id</td><td className="mono">{selUnit.owner_id}</td></tr>
-                <tr><td>evidence</td><td>{selUnit.evidence || selUnit.segmentation}</td></tr>
-                {selUnit.confidence != null && (
-                  <tr><td>confidence</td><td>{(selUnit.confidence * 100).toFixed(1)}%</td></tr>
-                )}
-                <tr><td>status</td><td className={selUnit.validation_status === 'conflict' ? 'status-pending' : 'status-confirmed'}>{selUnit.validation_status}</td></tr>
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {selSlab && (
-          <div className="panel-section">
-            <h3>section details</h3>
-            <table className="kv">
-              <tbody>
-                <tr><td>section</td><td>{selSlab.floor_index < 0 ? `basement ${-selSlab.floor_index}` : `floor ${selSlab.floor_index}`}</td></tr>
-                <tr><td>z-range</td><td>{selSlab.floor_index * FH} m - {(selSlab.floor_index + 1) * FH} m</td></tr>
-              </tbody>
-            </table>
-            
-            {canManage && (
-              <div style={{ marginTop: 12 }}>
-                {msg && <p className="all-clear tiny" style={{ marginBottom: 8 }}>{msg}</p>}
-                {err && <div className="error mono tiny" style={{ marginBottom: 8 }}>{err}</div>}
-                <p className="muted tiny" style={{ marginBottom: 4 }}>override this floor's segmentation</p>
-                <input 
-                  type="file" 
-                  accept="image/png, image/jpeg" 
-                  onChange={(e) => setFloorPlanFile(e.target.files[0])}
-                  style={{ fontSize: 11, marginBottom: 8 }}
-                />
-                <button className="btn primary" onClick={generateFloor} disabled={busy} style={{ width: '100%', fontSize: 12, padding: '4px 8px' }}>
-                  {busy ? 'generating...' : 'generate units for this floor'}
-                </button>
-              </div>
-            )}
-          </div>
+          <section className="sp-card">
+            <div className="sp-card-head">
+              <h3 className="sp-h3">Unit {selUnit.unit_no}, {floorName(selUnit.floor_index)}</h3>
+              <button className="sp-icon" aria-label="Close unit" onClick={() => setSelUlpin(null)}>×</button>
+            </div>
+            {selUnit.validation_status === 'conflict' && <p className="sp-chip is-bad">Overlaps another unit on this floor</p>}
+            <dl className="sp-facts">
+              <div><dt>Area</dt><dd>{selUnit.area_sqm} m²</dd></div>
+              <div><dt>Rights</dt><dd>{selUnit.rights_type}</dd></div>
+              <div><dt>Status</dt><dd>{selUnit.validation_status}</dd></div>
+            </dl>
+            <p className="sp-text">Owner: {selUnit.owner_name} <span className="sp-muted mono">({selUnit.owner_id})</span></p>
+            <p className="sp-muted mono">{selUnit.unit_ulpin}</p>
+            <p className={`sp-chip ${fromModel(selUnit) ? 'is-ok' : 'is-warn'}`}>
+              {fromModel(selUnit)
+                ? `Extracted by the floor-plan model${selUnit.confidence != null ? `, ${Math.round(selUnit.confidence * 100)}% confidence` : ''}`
+                : 'Estimated layout, no floor plan yet'}
+            </p>
+          </section>
         )}
       </aside>
     </main>

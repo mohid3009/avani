@@ -8,3 +8,6 @@ numpy>=1.26.0
 psycopg2-binary>=2.9.0
 
 ultralytics>=8.0.0
+
+# Google Open Buildings 2.5D heights (heights_open_buildings.py)
+earthengine-api>=1.0.0

@@ -1,13 +1,13 @@
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { Globe, Bell, Shield, HelpCircle, LogOut, ArrowLeft } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
-import { currentUser } from '../mockData.js'
+import { useProfile } from '../portalData.js'
 
 export default function Profile({ onLogout: propLogout }) {
   const navigate = useNavigate()
   const outlet = useOutletContext()
   const onLogout = propLogout || outlet?.onLogout || (() => {})
-  const initials = currentUser.name.split(' ').map((w) => w[0]).join('')
+  const { data: profile, loading } = useProfile()
 
   const settings = [
     { icon: <Globe size={16} />, label: 'Language', value: 'English' },
@@ -15,6 +15,10 @@ export default function Profile({ onLogout: propLogout }) {
     { icon: <Shield size={16} />, label: 'Privacy & Data', value: 'Coming soon' },
     { icon: <HelpCircle size={16} />, label: 'Help & Support', value: 'Coming soon' },
   ]
+
+  if (loading) return <div className="loading muted">loading profile…</div>
+  if (!profile) return <div className="loading muted">Sign in as a citizen to see your profile.</div>
+  const initials = profile.name.split(' ').map((w) => w[0]).join('')
 
   return (
     <div className="max-w-[640px]">
@@ -28,8 +32,8 @@ export default function Profile({ onLogout: propLogout }) {
           {initials}
         </div>
         <div>
-          <div className="text-lg font-extrabold text-ink">{currentUser.name}</div>
-          <div className="text-xs text-ink-mid font-id">{currentUser.citizenId}</div>
+          <div className="text-lg font-extrabold text-ink">{profile.name}</div>
+          <div className="text-xs text-ink-mid font-id">{profile.owner_id}</div>
         </div>
       </div>
 
@@ -38,15 +42,15 @@ export default function Profile({ onLogout: propLogout }) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <div className="text-[10px] uppercase tracking-wide text-ink-mid mb-0.5">Aadhaar</div>
-            <div className="text-sm font-bold text-ink font-id">{currentUser.aadhaarMasked}</div>
+            <div className="text-sm font-bold text-ink font-id">{profile.aadhaar}</div>
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-wide text-ink-mid mb-0.5">Mobile</div>
-            <div className="text-sm font-bold text-ink font-id">{currentUser.mobileMasked}</div>
+            <div className="text-sm font-bold text-ink font-id">{profile.phone}</div>
           </div>
         </div>
         <p className="text-[11px] text-ink-soft mt-3">
-          Mocked demonstration data — this build is not linked to Aadhaar or DigiLocker.
+          Demo citizen registry record — not linked to Aadhaar or DigiLocker.
         </p>
       </div>
 

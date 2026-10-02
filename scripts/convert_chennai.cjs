@@ -110,12 +110,9 @@ const rest = features.filter((f) => f.properties.source !== 'osm-levels')
 const kept = [...tagged, ...rest].slice(0, CAP)
 
 const outData = JSON.stringify({ type: 'FeatureCollection', features: kept })
-const publicOut = path.resolve(__dirname, '../3d_map/frontend/public/chennai_buildings.json')
-const srcOut = path.resolve(__dirname, '../3d_map/frontend/src/data/chennai_buildings.json')
-fs.writeFileSync(publicOut, outData)
-if (fs.existsSync(path.dirname(srcOut))) {
-  fs.writeFileSync(srcOut, outData)
-}
+// loaded into PostGIS by 3d_map/backend/seed_chennai.py
+const outPath = path.resolve(__dirname, '../3d_map/backend/seed/chennai_buildings.json')
+fs.writeFileSync(outPath, outData)
 console.log(`raw features: ${features.length} (tagged ${tagged.length}) → kept ${kept.length}`)
 console.log(`total storey slices: ${kept.reduce((s, f) => s + f.properties.stories, 0)}`)
 

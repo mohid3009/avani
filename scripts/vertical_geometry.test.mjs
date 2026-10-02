@@ -69,34 +69,56 @@ test('MapLibre slices use corrected elevations and negative basement bases', () 
 })
 
 
+// minimal in-memory stand-in for the FastAPI unit + correction endpoints
+function fakeBackend(units) {
+  const db = { units: structuredClone(units), edits: [] }
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status })
+  const handler = async (url, opts = {}) => {
+    const u = new URL(url, 'http://test')
+    const body = opts.body ? JSON.parse(opts.body) : null
+    const route = `${opts.method || 'GET'} ${u.pathname}`
+    if (route === 'GET /api/lidar/units') return json({ units: structuredClone(db.units[u.searchParams.get('building_id')] || []) })
+    if (route === 'PUT /api/lidar/units') { db.units[body.building_id] = structuredClone(body.units); return json({ saved: body.units.length }) }
+    if (route === 'GET /api/lidar/units/pending') return json(db.edits.filter((e) => e.status === 'pending'))
+    if (route === 'POST /api/lidar/units/update') {
+      if (db.edits.some((e) => e.unit_ulpin === body.unit_ulpin && e.status === 'pending')) return json({ detail: 'This unit already has a pending correction' }, 409)
+      const id = `edit-${db.edits.length + 1}`
+      db.edits.push({ ...body.patch, id, status: 'pending' })
+      return json({ id })
+    }
+    if (route === 'POST /api/lidar/units/confirm') {
+      const e = db.edits.find((x) => x.id === body.id && x.status === 'pending')
+      if (!e) return json({ detail: 'pending edit not found' }, 404)
+      Object.assign(e, body.resolution, { status: body.status })
+      return json(e)
+    }
+    return json({ detail: `unexpected ${route}` }, 500)
+  }
+  return { db, handler }
+}
+
 test('correction decisions validate overlaps, preserve heights and reject stale or repeated decisions', async () => {
-  const storage = new Map()
-  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
-  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
-    getItem: (key) => storage.get(key) ?? null,
-    setItem: (key, value) => storage.set(key, value),
-  } })
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: new EventTarget() })
-  const surveyor = { name: 'Surveyor 1', role: 'surveyor' }
-  const registrar = { name: 'Registrar 1', role: 'registrar' }
-  const key = 'avani-demo-units'
-  storage.set(key, JSON.stringify({ test: [
+  const { db, handler } = fakeBackend({ test: [
     unit(1, { owner_name: 'A', area_sqm: 100, validation_status: 'confirmed' }),
     unit(2, { owner_name: 'B', area_sqm: 100, validation_status: 'confirmed' }),
-  ] }))
+  ] })
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = handler
+  const surveyor = { name: 'Surveyor 1', role: 'surveyor' }
+  const registrar = { name: 'Registrar 1', role: 'registrar' }
   try {
     await assert.rejects(proposeUnitCorrection('test', 'test-F2', { z_min: '', z_max: 6 }, surveyor), /required/)
     assert.equal(getPendingUnitEdits().length, 0)
     const bad = await proposeUnitCorrection('test', 'test-F2', { z_min: 2, z_max: 6 }, surveyor)
     assert.ok(bad.overlapAfter > 0)
+    assert.equal(getPendingUnitEdits().length, 1)
     await assert.rejects(confirmUnitCorrection(bad.editId, registrar), /overlaps/)
     await assert.rejects(proposeUnitCorrection('test', 'test-F2', {}, surveyor), /already has/)
     await assert.rejects(updateUnit('test', 'test-F2', { owner_name: 'Other' }), /pending correction/)
     await rejectUnitCorrection(bad.editId, registrar, 'Overlap remains')
     await assert.rejects(confirmUnitCorrection(bad.editId, registrar), /no longer pending/)
     await assert.rejects(rejectUnitCorrection(bad.editId, registrar), /no longer pending/)
-    assert.equal(JSON.parse(storage.get(key)).test[1].validation_status, 'confirmed')
+    assert.equal(db.units.test[1].validation_status, 'confirmed')
 
     const good = await proposeUnitCorrection('test', 'test-F2', { z_min: 3, z_max: 7 }, surveyor)
     const result = await confirmUnitCorrection(good.editId, registrar)
@@ -112,15 +134,11 @@ test('correction decisions validate overlaps, preserve heights and reject stale 
     assert.deepEqual(unitRenderRange(current, 0.7), { base: 3.7, top: 7.7 })
     assert.equal(unitSliceFeatures(building, [current], 0.7)[0].properties.height_m, 7.7)
 
+    // another user edits the unit after the proposal → approval must be refused
     const stale = await proposeUnitCorrection('test', 'test-F2', { z_min: 3, z_max: 8 }, surveyor)
-    const db = JSON.parse(storage.get(key))
-    db.test[1].revision++
-    storage.set(key, JSON.stringify(db))
+    db.units.test[1].revision++
     await assert.rejects(confirmUnitCorrection(stale.editId, registrar), /changed after/)
   } finally {
-    if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage)
-    else delete globalThis.localStorage
-    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
-    else delete globalThis.window
+    globalThis.fetch = previousFetch
   }
 })

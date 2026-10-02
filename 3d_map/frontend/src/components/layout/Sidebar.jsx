@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, FileText, ShieldCheck, MessageSquareWarning, User, LogOut } from 'lucide-react'
-import { currentUser, buildings, complaints } from '../../mockData.js'
+import { myOwnerId } from '../../api.js'
+import { useComplaints, useOwnedBuildings } from '../../portalData.js'
 
 const base =
   'flex items-center gap-3 px-3 py-2 mx-3 rounded-[10px] text-sm font-medium border-l-[3px] border-l-transparent'
@@ -9,9 +10,10 @@ const idle = 'text-ink hover:bg-neutralbg'
 
 export default function Sidebar({ onLogout }) {
   const navigate = useNavigate()
-  const ownedUnits = buildings.flatMap(b => b.units).filter(u => currentUser.ownedUnitIds.includes(u.id))
-  const firstOwned = ownedUnits[0]
-  const openCount = complaints.filter(c => c.status !== 'resolved').length
+  const { data: owned } = useOwnedBuildings()
+  const { data: complaints } = useComplaints()
+  const firstOwned = (owned || []).flatMap((b) => b.units).find((u) => u.ownerId === myOwnerId())
+  const openCount = (complaints || []).filter((c) => c.status !== 'resolved').length
   return (
     <aside className="citizen-sidebar hidden min-[900px]:flex w-[232px] shrink-0 flex-col bg-surface border-r border-line sticky top-0 h-[calc(100vh-60px)] overflow-y-auto py-5">
       <div className="text-[10px] uppercase tracking-widest text-ink-soft px-6 mb-2">Menu</div>

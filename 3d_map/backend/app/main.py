@@ -4,12 +4,14 @@ import os
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .postgis import init_postgis
 
 app = FastAPI(title="Layerd API", version="2.0")
+app.add_middleware(GZipMiddleware, minimum_size=1024)  # the city GeoJSON is ~4 MB raw
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,7 +50,8 @@ def login(payload: dict = Body(...)):
             raise HTTPException(401, "invalid username or password for this role")
         name = next(n for oid, n in OWNERS if oid == acct["owner_id"])
         token = hashlib.sha256(f"{username}:{password}:{role}".encode()).hexdigest()[:32]
-        return {"token": token, "role": role, "username": username, "name": name}
+        return {"token": token, "role": role, "username": username, "name": name,
+                "owner_id": acct["owner_id"]}
     acct = DEMO_ACCOUNTS[role]
     if username != acct["username"] or password != acct["password"]:
         raise HTTPException(401, "invalid username or password for this role")
@@ -216,6 +219,17 @@ def lidar_delete_building(building_id: str):
     return {"status": "deleted", "building_id": building_id}
 
 
+@app.get("/lidar/buildings/{building_id}")
+def lidar_building(building_id: str):
+    """One saved building as a GeoJSON Feature."""
+    from .postgis import fetch_building
+
+    feat = fetch_building(building_id)
+    if feat is None:
+        raise HTTPException(404, f"building {building_id} not found")
+    return feat
+
+
 @app.get("/lidar/regions")
 def lidar_region(lat: float, lon: float):
     """Reverse-geocode a scan centroid to {country, region} for the grouping UI."""
@@ -294,71 +308,97 @@ def lidar_delete_session(session_id: str):
 
 # ---------------- 3D ULPIN units ----------------
 
-@app.get("/lidar/units")
-def ulpin_units_for_building(building_id: str = Query(...)):
-    """
-    All 3D ULPIN units of one building. If the building has no units yet, mock
-    segmentation (random fallback) is generated and persisted into the
-    ulpin_units table on the fly, using the building's own floor/basement
-    counts — so the tables always carry the segment parts.
-    """
+def _footprint_size_m(feat):
+    """Width/depth (m) of a footprint's bounding box — unit polygons are normalized to it."""
     import math
-
-    from shapely.geometry import Polygon as ShPolygon
-
-    from .postgis import fetch_buildings, fetch_units, save_units
-    from .segmentation import random_units
-    from .ulpin import base_ulpin, owner_for, unit_ulpin
-
-    units = fetch_units(building_id)
-    if units:
-        return {"building_id": building_id, "mock": False, "units": units}
-
-    fc = fetch_buildings()
-    feat = next(
-        (f for f in fc["features"] if f["properties"].get("building_id") == building_id),
-        None,
-    )
-    if feat is None:
-        return {"building_id": building_id, "mock": True, "units": []}
-
-    props = feat["properties"]
-    floors = max(1, int(props.get("stories") or 1))
-    basements = max(0, int(props.get("basements") or 0))
-    rects = random_units(6, seed=building_id)
-    base = base_ulpin(building_id)
 
     geom = feat["geometry"]
     ring = geom["coordinates"][0] if geom["type"] == "Polygon" else geom["coordinates"][0][0]
-    lons = [c[0] for c in ring]
-    lats = [c[1] for c in ring]
+    lons = [p[0] for p in ring]
+    lats = [p[1] for p in ring]
     lat_mid = (min(lats) + max(lats)) / 2
-    width_m = max(1.0, (max(lons) - min(lons)) * 111320 * math.cos(math.radians(lat_mid)))
-    depth_m = max(1.0, (max(lats) - min(lats)) * 110540)
+    width = max(1.0, (max(lons) - min(lons)) * 111320 * math.cos(math.radians(lat_mid)))
+    depth = max(1.0, (max(lats) - min(lats)) * 110540)
+    return width, depth
 
+
+def _floor_units(building_id, feat, floor_index, seg):
+    """Turn one floor's segmentation into ULPIN unit records (+ overlap check)."""
+    from itertools import combinations
+
+    from shapely.geometry import Polygon as ShPolygon
+
+    from .ulpin import base_ulpin, owner_for, unit_ulpin
+
+    base = base_ulpin(building_id)
+    width, depth = _footprint_size_m(feat)
     units = []
-    for floor_index in list(range(-basements, 0)) + list(range(1, floors + 1)):
-        for j, (x0, y0, x1, y1, conf) in enumerate(rects, start=1):
-            ulp = unit_ulpin(base, floor_index, j)
-            owner = owner_for(ulp, floor_index)
-            poly = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
-            poly_m = [[x * width_m, y * depth_m] for x, y in poly[:-1]]
-            area = abs(ShPolygon(poly_m).area)
-            units.append({
-                "unit_ulpin": ulp,
-                "base_ulpin": base,
-                "floor_index": floor_index,
-                "unit_no": j,
-                "polygon": poly,
-                "area_sqm": round(area, 2),
-                "rights_type": owner["rights_type"],
-                "owner_id": owner["owner_id"],
-                "owner_name": owner["owner_name"],
-                "segmentation": "mock",
-                "validation_status": "valid",
-            })
+    for j, part in enumerate(seg["units"], start=1):
+        ulp = unit_ulpin(base, floor_index, j)
+        owner = owner_for(ulp, floor_index)
+        poly = part["polygon"]
+        area = ShPolygon([[x * width, y * depth] for x, y in poly[:-1]]).buffer(0).area
+        units.append({
+            "unit_ulpin": ulp,
+            "base_ulpin": base,
+            "floor_index": floor_index,
+            "unit_no": j,
+            "polygon": poly,
+            "area_sqm": round(area, 2),
+            "rights_type": owner["rights_type"],
+            "owner_id": owner["owner_id"],
+            "owner_name": owner["owner_name"],
+            "segmentation": seg["source"],  # 'model' | 'estimated'
+            "confidence": part.get("confidence"),
+            "evidence": part.get("label") or seg["note"],
+            "validation_status": "valid",
+        })
+    # topology check (PRD FR13): units on a floor must not overlap. Masks share
+    # wall pixels, so only overlaps above 2 % of the smaller unit count.
+    shapes = [ShPolygon(u["polygon"][:-1]).buffer(0) for u in units]
+    for (i, a), (k, b) in combinations(enumerate(shapes), 2):
+        if a.intersection(b).area > 0.02 * min(a.area, b.area):
+            units[i]["validation_status"] = units[k]["validation_status"] = "conflict"
+    return units
+
+
+def _floor_range(floors, basements):
+    return list(range(-int(basements), 0)) + list(range(1, int(floors) + 1))
+
+
+@app.get("/lidar/segmentation/status")
+def segmentation_status():
+    """Which floor-plan model unit extraction will use (or why it cannot)."""
+    from .segmentation import model_status
+
+    return model_status()
+
+
+@app.get("/lidar/units")
+def ulpin_units_for_building(building_id: str = Query(...)):
+    """
+    All 3D ULPIN units of one building. A building without units gets an
+    *estimated* layout (labelled segmentation='estimated') on first request,
+    using its own floor/basement counts, until a surveyor uploads a plan.
+    """
+    from .postgis import fetch_building, fetch_units, save_units
+    from .segmentation import segment_floorplan
+
+    units = fetch_units(building_id)
+    if units:
+        return {"building_id": building_id, "units": units}
+
+    feat = fetch_building(building_id)
+    if feat is None:
+        return {"building_id": building_id, "units": []}
+
+    props = feat["properties"]
+    seg = segment_floorplan(None, n_units=6, seed=building_id)
+    floors = max(1, int(props.get("stories") or 1))
+    basements = max(0, int(props.get("basements") or 0))
+    units = [u for f in _floor_range(floors, basements) for u in _floor_units(building_id, feat, f, seg)]
     save_units(building_id, units)
-    return {"building_id": building_id, "mock": True, "units": units}
+    return {"building_id": building_id, "units": units}
 
 
 @app.delete("/lidar/units")
@@ -378,19 +418,13 @@ async def ulpin_units_generate(
     plan: UploadFile | None = File(None),
 ):
     """
-    Generate the 3D ULPIN unit tree for one building. With an uploaded floor
-    plan image the YOLOv11-seg model proposes the unit layout; without one (or
-    when the model is unavailable) a randomly generated plan is used instead.
-    Unit ULPINs follow `{base}-F{floor}-U{unit}` (basements: negative floors).
+    Generate the whole unit tree of one building. With a floor-plan image the
+    trained model extracts the unit outlines (same plan on every floor);
+    otherwise the layout is estimated. Unit ULPINs: `{base}-F{floor}-U{unit}`.
     """
-    import math
-    from itertools import combinations
-
-    from shapely.geometry import Polygon as ShPolygon
-
-    from .postgis import fetch_buildings, save_units
+    from .postgis import fetch_building, save_units
     from .segmentation import segment_floorplan
-    from .ulpin import base_ulpin, owner_for, unit_ulpin
+    from .ulpin import base_ulpin
 
     if floors < 1 or floors > 60:
         raise HTTPException(400, "floors must be between 1 and 60")
@@ -399,75 +433,47 @@ async def ulpin_units_generate(
     if floor_height <= 0 or floor_height > 12:
         raise HTTPException(400, "floor_height must be between 0 and 12")
 
-    fc = fetch_buildings()
-    feat = next(
-        (f for f in fc["features"] if f["properties"].get("building_id") == building_id),
-        None,
-    )
+    feat = fetch_building(building_id)
     if feat is None:
         raise HTTPException(404, f"building {building_id} not found")
 
-    geom = feat["geometry"]
-    ring = geom["coordinates"][0] if geom["type"] == "Polygon" else geom["coordinates"][0][0]
-    lons = [c[0] for c in ring]
-    lats = [c[1] for c in ring]
-    min_lon, max_lon, min_lat, max_lat = min(lons), max(lons), min(lats), max(lats)
-    base = base_ulpin(building_id)
-
-    image_bytes = await plan.read() if plan else None
-    seg = segment_floorplan(image_bytes)
-
-    lat_mid = (min_lat + max_lat) / 2
-    width_m = max(1.0, (max_lon - min_lon) * 111320 * math.cos(math.radians(lat_mid)))
-    depth_m = max(1.0, (max_lat - min_lat) * 110540)
-
-    units = []
-    for floor_index in list(range(-int(basements), 0)) + list(range(1, int(floors) + 1)):
-        floor_units = []
-        for j, (x0, y0, x1, y1, conf) in enumerate(seg["rects"], start=1):
-            ulp = unit_ulpin(base, floor_index, j)
-            owner = owner_for(ulp, floor_index)
-            poly = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
-            poly_m = [[x * width_m, y * depth_m] for x, y in poly[:-1]]
-            area = abs(ShPolygon(poly_m).area)
-            floor_units.append({
-                "unit_ulpin": ulp,
-                "base_ulpin": base,
-                "floor_index": floor_index,
-                "unit_no": j,
-                "polygon": poly,
-                "area_sqm": round(area, 2),
-                "rights_type": owner["rights_type"],
-                "owner_id": owner["owner_id"],
-                "owner_name": owner["owner_name"],
-                "segmentation": seg["source"],
-                "confidence": conf,
-                "evidence": seg["source"],
-                "validation_status": "valid",
-            })
-        # topology check (PRD FR13): units on a floor must not overlap
-        for a, b in combinations(floor_units, 2):
-            pa = ShPolygon(a["polygon"][:-1])
-            pb = ShPolygon(b["polygon"][:-1])
-            if pa.intersection(pb).area > 1e-9:
-                a["validation_status"] = "conflict"
-                b["validation_status"] = "conflict"
-        units.extend(floor_units)
-
+    seg = segment_floorplan(await plan.read() if plan else None, n_units=6, seed=building_id)
+    units = [u for f in _floor_range(floors, basements) for u in _floor_units(building_id, feat, f, seg)]
     saved = save_units(building_id, units)
     return {
         "building_id": building_id,
-        "base_ulpin": base,
+        "base_ulpin": base_ulpin(building_id),
         "segmentation": seg["source"],
-                "confidence": conf,
-                "evidence": seg["source"],
+        "note": seg["note"],
         "floors": floors,
         "basements": basements,
         "unit_count": len(units),
+        "conflicts": sum(u["validation_status"] == "conflict" for u in units),
         "saved": saved,
         "units": units,
     }
 
+
+@app.put("/lidar/units")
+def ulpin_units_replace(payload: dict = Body(...)):
+    """Replace one building's whole unit tree (registrar edits, corrections)."""
+    from .postgis import save_units
+
+    building_id = payload.get("building_id")
+    units = payload.get("units")
+    if not building_id or not isinstance(units, list):
+        raise HTTPException(400, "building_id and a units list are required")
+    if any(not u.get("unit_ulpin") or "polygon" not in u for u in units):
+        raise HTTPException(400, "every unit needs unit_ulpin and polygon")
+    return {"building_id": building_id, "saved": save_units(building_id, units), "units": units}
+
+
+@app.get("/lidar/units/all")
+def ulpin_units_all():
+    """Every unit across all buildings — the registrar search index."""
+    from .postgis import fetch_all_units
+
+    return fetch_all_units()
 
 
 @app.get("/lidar/units/pending")
@@ -475,25 +481,34 @@ def lidar_units_pending():
     from .postgis import get_pending_unit_edits
     return get_pending_unit_edits()
 
+
 @app.post("/lidar/units/update")
 def lidar_units_update(payload: dict = Body(...)):
+    """Surveyor proposes a unit correction; payload.patch is the full proposal."""
     from .postgis import propose_unit_edit
-    b_id = payload.get("building_id")
-    ulp = payload.get("unit_ulpin")
-    prop = payload.get("proposed_by")
-    patch = payload.get("patch")
-    edit_id = propose_unit_edit(b_id, ulp, prop, patch)
+
+    b_id, ulp, patch = payload.get("building_id"), payload.get("unit_ulpin"), payload.get("patch")
+    if not b_id or not ulp or not isinstance(patch, dict):
+        raise HTTPException(400, "building_id, unit_ulpin and patch are required")
+    try:
+        edit_id = propose_unit_edit(b_id, ulp, payload.get("proposed_by") or "surveyor", patch)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
     return {"status": "pending", "id": edit_id}
+
 
 @app.post("/lidar/units/confirm")
 def lidar_units_confirm(payload: dict = Body(...)):
-    from .postgis import confirm_unit_edit
-    edit_id = payload.get("id")
+    """Registrar resolves a correction: status 'confirmed' or 'rejected'."""
+    from .postgis import resolve_unit_edit
+
     status = payload.get("status")
-    res = confirm_unit_edit(edit_id, status)
+    if status not in ("confirmed", "rejected"):
+        raise HTTPException(400, "status must be 'confirmed' or 'rejected'")
+    res = resolve_unit_edit(payload.get("id"), status, payload.get("resolution"))
     if not res:
-        raise HTTPException(404, "edit not found")
-    return {"status": status, "building_id": res[0], "unit_ulpin": res[1]}
+        raise HTTPException(404, "pending edit not found")
+    return res
 
 
 
@@ -503,75 +518,26 @@ async def ulpin_units_generate_floor(
     floor_index: int = Form(...),
     plan: UploadFile | None = File(None),
 ):
-    import math
-    from itertools import combinations
-    from shapely.geometry import Polygon as ShPolygon
-
-    from .postgis import fetch_buildings, save_floor_units, fetch_units
+    """Re-extract one floor's units from its own plan (floors often differ)."""
+    from .postgis import fetch_building, fetch_units, save_floor_units
     from .segmentation import segment_floorplan
-    from .ulpin import base_ulpin, owner_for, unit_ulpin
+    from .ulpin import base_ulpin
 
-    fc = fetch_buildings()
-    feat = next(
-        (f for f in fc["features"] if f["properties"].get("building_id") == building_id),
-        None,
-    )
+    feat = fetch_building(building_id)
     if feat is None:
         raise HTTPException(404, f"building {building_id} not found")
 
-    geom = feat["geometry"]
-    ring = geom["coordinates"][0] if geom["type"] == "Polygon" else geom["coordinates"][0][0]
-    lons = [c[0] for c in ring]
-    lats = [c[1] for c in ring]
-    min_lon, max_lon, min_lat, max_lat = min(lons), max(lons), min(lats), max(lats)
-    base = base_ulpin(building_id)
-
-    image_bytes = await plan.read() if plan else None
-    seg = segment_floorplan(image_bytes)
-
-    lat_mid = (min_lat + max_lat) / 2
-    width_m = max(1.0, (max_lon - min_lon) * 111320 * math.cos(math.radians(lat_mid)))
-    depth_m = max(1.0, (max_lat - min_lat) * 110540)
-
-    floor_units = []
-    for j, (x0, y0, x1, y1, conf) in enumerate(seg["rects"], start=1):
-        ulp = unit_ulpin(base, floor_index, j)
-        owner = owner_for(ulp, floor_index)
-        poly = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]
-        poly_m = [[x * width_m, y * depth_m] for x, y in poly[:-1]]
-        area = abs(ShPolygon(poly_m).area)
-        floor_units.append({
-            "unit_ulpin": ulp,
-            "base_ulpin": base,
-            "floor_index": floor_index,
-            "unit_no": j,
-            "polygon": poly,
-            "area_sqm": round(area, 2),
-            "rights_type": owner["rights_type"],
-            "owner_id": owner["owner_id"],
-            "owner_name": owner["owner_name"],
-            "segmentation": seg["source"],
-            "confidence": conf,
-            "evidence": seg["source"],
-            "validation_status": "valid",
-        })
-    # topology check
-    for a, b in combinations(floor_units, 2):
-        pa = ShPolygon(a["polygon"][:-1])
-        pb = ShPolygon(b["polygon"][:-1])
-        if pa.intersection(pb).area > 1e-9:
-            a["validation_status"] = "conflict"
-            b["validation_status"] = "conflict"
-
+    seg = segment_floorplan(await plan.read() if plan else None, n_units=6, seed=f"{building_id}:{floor_index}")
+    floor_units = _floor_units(building_id, feat, floor_index, seg)
     saved = save_floor_units(building_id, floor_index, floor_units)
-    
-    # Return all units for the building so the UI updates
-    all_units = fetch_units(building_id)
+    all_units = fetch_units(building_id)  # the UI redraws the whole building
     return {
         "building_id": building_id,
-        "base_ulpin": base,
+        "base_ulpin": base_ulpin(building_id),
         "segmentation": seg["source"],
-        "unit_count": len(all_units),
+        "note": seg["note"],
+        "unit_count": len(floor_units),
+        "conflicts": sum(u["validation_status"] == "conflict" for u in floor_units),
         "saved": saved,
         "units": all_units,
     }

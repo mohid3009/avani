@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect } from 'react'
 import { Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
-import { DEMO_USERS, SESSION_KEY } from './constants.js'
+import { SESSION_KEY } from './constants.js'
 import Landing from './components/Landing.jsx'
 import Login from './components/Login.jsx'
 const Dashboard = lazy(() => import('./components/Dashboard.jsx'))
@@ -40,13 +40,12 @@ function saveSession(s) {
  * Wraps a page component with the app topbar and a centred content column.
  * `maxW` controls the max-width of the content area.
  */
-function PageShell({ session, onLogout, onSwitchRole, activeLanguage, onLanguageChange, maxW = '1100px', children }) {
+function PageShell({ session, onLogout, activeLanguage, onLanguageChange, maxW = '1100px', children }) {
   return (
     <div className="app min-h-screen citizen-dash" style={{ background: '#F5F6F8', color: '#1C2530', overflowY: 'auto' }}>
       <Topbar
         session={session}
         onLogout={onLogout}
-        onSwitchRole={onSwitchRole}
         activeLanguage={activeLanguage}
         onLanguageChange={onLanguageChange}
       />
@@ -58,6 +57,14 @@ function PageShell({ session, onLogout, onSwitchRole, activeLanguage, onLanguage
       </div>
     </div>
   )
+}
+
+// Each portal is its own world: signed-out visitors go to the landing page, and a
+// role that opens another role's URL is sent back to its own dashboard.
+const STAFF = ['surveyor', 'registrar']
+function Only({ session, roles, children }) {
+  if (!session) return <Navigate to="/" replace />
+  return roles.includes(session.role) ? children : <Navigate to="/dashboard" replace />
 }
 
 // ── root component ────────────────────────────────────────────────────────────
@@ -84,10 +91,6 @@ export default function App() {
 
   const updateSession = (s) => { setSession(s); saveSession(s) }
 
-  const switchRole = (newRole) => {
-    updateSession(DEMO_USERS[newRole] ?? DEMO_USERS.citizen)
-  }
-
   const changeLanguage = (language) => {
     setActiveLanguage(language)
     localStorage.setItem('avani-language', language)
@@ -95,7 +98,6 @@ export default function App() {
 
   const sharedProps = {
     onLogout:         () => updateSession(null),
-    onSwitchRole:     switchRole,
     activeLanguage,
     onLanguageChange: changeLanguage,
   }
@@ -104,38 +106,40 @@ export default function App() {
     <Suspense fallback={<PageFallback />}>
     <Routes>
       {/* Landing / login */}
-      <Route path="/"        element={<Home setSession={updateSession} />} />
+      <Route path="/"        element={<Home session={session} setSession={updateSession} />} />
       {/* /landing kept for backwards-compat deep links */}
-      <Route path="/landing" element={<Home setSession={updateSession} />} />
+      <Route path="/landing" element={<Home session={session} setSession={updateSession} />} />
       <Route path="/login"   element={<LoginRoute session={session} setSession={updateSession} />} />
 
       {/* Main dashboard */}
       <Route path="/dashboard" element={<Dashboard session={session} {...sharedProps} />} />
 
       {/* Property passport — accessible via two URL shapes */}
-      <Route path="/passport/:id"        element={<PageShell session={session} {...sharedProps} maxW="1100px"><PropertyPassport /></PageShell>} />
-      <Route path="/portal/passport/:id" element={<PageShell session={session} {...sharedProps} maxW="1100px"><PropertyPassport /></PageShell>} />
+      <Route path="/passport/:id"        element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="1100px"><PropertyPassport /></PageShell></Only>} />
+      <Route path="/portal/passport/:id" element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="1100px"><PropertyPassport /></PageShell></Only>} />
 
-      <Route path="/portal/building/:id/3d" element={<PageShell session={session} {...sharedProps}><Building3DView /></PageShell>} />
+      <Route path="/portal/building/:id/3d" element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps}><Building3DView /></PageShell></Only>} />
       {/* Portal pages */}
-      <Route path="/portal/property/:id" element={<PageShell session={session} {...sharedProps} maxW="1160px"><PropertyDetails /></PageShell>} />
-      <Route path="/portal/records"      element={<PageShell session={session} {...sharedProps} maxW="1100px"><PropertyRecords /></PageShell>} />
-      <Route path="/portal/upc/:id"      element={<PageShell session={session} {...sharedProps} maxW="800px"><UnifiedPropertyCard /></PageShell>} />
-      <Route path="/portal/report/:unitId" element={<PageShell session={session} {...sharedProps} maxW="800px"><ComplaintForm /></PageShell>} />
-      <Route path="/portal/profile"      element={<PageShell session={session} {...sharedProps} maxW="800px"><Profile onLogout={() => updateSession(null)} /></PageShell>} />
+      <Route path="/portal/property/:id" element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="1160px"><PropertyDetails /></PageShell></Only>} />
+      <Route path="/portal/records"      element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="1100px"><PropertyRecords /></PageShell></Only>} />
+      <Route path="/portal/upc/:id"      element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="800px"><UnifiedPropertyCard /></PageShell></Only>} />
+      <Route path="/portal/report/:unitId" element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="800px"><ComplaintForm /></PageShell></Only>} />
+      <Route path="/portal/profile"      element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="800px"><Profile onLogout={() => updateSession(null)} /></PageShell></Only>} />
 
       {/* 3D ULPIN view — lazy-loaded, wrapped in ErrorBoundary */}
       <Route
         path="/ulpin"
         element={
+          <Only session={session} roles={['citizen', ...STAFF]}>
           <div className="app">
-            <Topbar session={session} onLogout={() => updateSession(null)} onSwitchRole={switchRole} activeLanguage={activeLanguage} onLanguageChange={changeLanguage} />
+            <Topbar session={session} onLogout={() => updateSession(null)} activeLanguage={activeLanguage} onLanguageChange={changeLanguage} />
             <ErrorBoundary>
               <Suspense fallback={<PageFallback />}>
                 <UlpinView session={session} />
               </Suspense>
             </ErrorBoundary>
           </div>
+          </Only>
         }
       />
 
@@ -143,8 +147,9 @@ export default function App() {
       <Route
         path="/lidar"
         element={
+          <Only session={session} roles={STAFF}>
           <div className="app">
-            <Topbar session={session} onLogout={() => updateSession(null)} onSwitchRole={switchRole} activeLanguage={activeLanguage} onLanguageChange={changeLanguage} />
+            <Topbar session={session} onLogout={() => updateSession(null)} activeLanguage={activeLanguage} onLanguageChange={changeLanguage} />
             <ErrorBoundary>
               <Suspense fallback={<PageFallback />}>
                 <LidarMap
@@ -154,6 +159,7 @@ export default function App() {
               </Suspense>
             </ErrorBoundary>
           </div>
+          </Only>
         }
       />
 
@@ -161,14 +167,16 @@ export default function App() {
       <Route
         path="/pointcloud"
         element={
+          <Only session={session} roles={STAFF}>
           <div className="app">
-            <Topbar session={session} onLogout={() => updateSession(null)} onSwitchRole={switchRole} activeLanguage={activeLanguage} onLanguageChange={changeLanguage} />
+            <Topbar session={session} onLogout={() => updateSession(null)} activeLanguage={activeLanguage} onLanguageChange={changeLanguage} />
             <ErrorBoundary>
               <Suspense fallback={<PageFallback />}>
                 <PointCloudViewer session={session} />
               </Suspense>
             </ErrorBoundary>
           </div>
+          </Only>
         }
       />
 
@@ -176,14 +184,16 @@ export default function App() {
       <Route
         path="/oblique"
         element={
+          <Only session={session} roles={STAFF}>
           <div className="app">
-            <Topbar session={session} onLogout={() => updateSession(null)} onSwitchRole={switchRole} activeLanguage={activeLanguage} onLanguageChange={changeLanguage} />
+            <Topbar session={session} onLogout={() => updateSession(null)} activeLanguage={activeLanguage} onLanguageChange={changeLanguage} />
             <ErrorBoundary>
               <Suspense fallback={<PageFallback />}>
                 <ObliqueImagery session={session} />
               </Suspense>
             </ErrorBoundary>
           </div>
+          </Only>
         }
       />
 
@@ -196,8 +206,9 @@ export default function App() {
 
 // ── route-level components ────────────────────────────────────────────────────
 
-function Home({ setSession }) {
+function Home({ session, setSession }) {
   const navigate = useNavigate()
+  if (session) return <Navigate to="/dashboard" replace />
   return (
     <Landing
       onLogin={(s) => { setSession(s); navigate('/dashboard') }}
@@ -208,18 +219,11 @@ function Home({ setSession }) {
 function LoginRoute({ session, setSession }) {
   const navigate  = useNavigate()
   const [params]  = useSearchParams()
-  const reqRole   = params.get('role')
-
-  useEffect(() => {
-    if (reqRole && DEMO_USERS[reqRole]) {
-      setSession(DEMO_USERS[reqRole])
-      navigate('/dashboard')
-    }
-  }, [reqRole, setSession, navigate])
+  if (session) return <Navigate to="/dashboard" replace />
 
   return (
     <Login
-      initialRole={reqRole || session?.role || 'citizen'}
+      initialRole={params.get('role') || 'citizen'}
       onLogin={(s) => { setSession(s); navigate('/dashboard') }}
       onBack={() => navigate('/')}
     />

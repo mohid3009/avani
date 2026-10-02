@@ -1,7 +1,7 @@
 const tones = {
-  verified: 'bg-greenbg text-green',
+  verified: 'bg-[#E3F1EA] text-[#0F5442]',
   review: 'bg-amberbg text-[#8A6410]',
-  info: 'bg-bluebg text-blue',
+  info: 'bg-[#E8EEFB] text-[#2E3F9E]',
 }
 
 export default function StatusPill({ variant = 'info', children }) {

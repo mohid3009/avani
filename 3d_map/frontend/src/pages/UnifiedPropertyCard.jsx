@@ -6,20 +6,21 @@ import DetailGrid from '../components/ui/DetailGrid.jsx'
 import MapInset from '../components/ui/MapInset.jsx'
 import MiniRow from '../components/ui/MiniRow.jsx'
 import StatusPill from '../components/ui/StatusPill.jsx'
-import { getBuilding } from '../mockData.js'
+import { useBuilding } from '../portalData.js'
 
 export default function UnifiedPropertyCard() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const b = getBuilding(id)
+  const { data: b, loading } = useBuilding(id)
 
+  if (loading) return <div className="loading muted">loading parcel…</div>
   if (!b) {
     return (
       <div className="max-w-[640px]">
         <Breadcrumb current="Unified Property Card" />
         <div className="bg-surface border border-line rounded-[14px] p-6 text-sm text-ink-mid">
           Parcel not found.{' '}
-          <Link to="/portal/records" className="text-[#4C5BD4] font-semibold">Back to records</Link>
+          <Link to="/portal/records" className="text-[#176B55] font-semibold">Back to records</Link>
         </div>
       </div>
     )
@@ -48,28 +49,28 @@ export default function UnifiedPropertyCard() {
         <div className="bg-surface border border-line rounded-[12px] p-4 mt-4">
           <DetailGrid
             fields={[
-              { label: 'Owner Identity', value: `${b.name} Owners Association` },
-              { label: 'Mobile', value: '+91 XXXXX 41209' },
-              { label: 'Record of Rights', value: 'RoR 2026 · Vol 12' },
-              { label: 'Property Tax', value: 'Paid · FY 2026-27' },
+              { label: 'Base ULPIN', value: b.baseUlpin },
+              { label: 'Registered Owners', value: String(new Set(b.units.map((u) => u.ownerId)).size) },
+              { label: 'Storeys', value: `${b.floors ?? '—'}${b.basements ? ` + ${b.basements} basement` : ''}` },
+              { label: 'Height', value: b.height != null ? `${b.height} m` : '—' },
             ]}
             columns={2}
           />
           <p className="flex items-start gap-1.5 text-[11px] text-ink-soft mt-3">
             <Info size={12} className="mt-0.5 shrink-0" />
-            Demonstration data only — this build is not linked to Aadhaar or DigiLocker.
+            Owners come from the demo ULPIN owner registry — not linked to Aadhaar or DigiLocker.
           </p>
         </div>
 
         <div className="mt-3">
-          <MapInset ulpin={b.baseUlpin} />
+          <MapInset geometry={b.feature.geometry} ulpin={b.baseUlpin} />
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2.5 mt-3">
           <button
             onClick={() => firstUnit && navigate(`/portal/passport/${firstUnit.id}`)}
             disabled={!firstUnit}
-            className="flex-1 inline-flex items-center justify-center gap-2 bg-[#4C5BD4] text-white text-xs font-bold rounded-[10px] px-3 py-2.5 hover:bg-[#3F4DBD] disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
+            className="flex-1 inline-flex items-center justify-center gap-2 bg-[#176B55] text-white text-xs font-bold rounded-[10px] px-3 py-2.5 hover:bg-[#0F5442] disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
           >
             <ShieldCheck size={15} /> Official UPC Certificate &amp; Deed
           </button>

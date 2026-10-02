@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Map as MapLibreMap, NavigationControl, Marker, addProtocol } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import * as pmtiles from 'pmtiles'
-import { peekUnits, demoBaseUlpin, demoOwner, digipin } from '../api.js'
+import { peekUnits, digipin } from '../api.js'
 import { floorSlices, shadowFeatures, unitSliceFeatures } from '../floors.js'
 import { TIME_LIGHTING_PRESETS } from '../constants.js'
 
@@ -34,7 +34,28 @@ const TILES = {
 
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
 
-function bboxOf(features) {
+// Bounds of the densest city-sized cluster, so scans far apart (Chennai + Mumbai)
+// don't zoom the map out to where buildings are invisible specks.
+function bboxOf(all) {
+  const cell = (f) => {
+    const [x, y] = f.geometry?.type === 'Polygon' ? f.geometry.coordinates[0][0] : f.geometry?.coordinates?.flat()?.[0] || []
+    return `${Math.round(x)},${Math.round(y)}`
+  }
+  const groups = new Map()
+  for (const f of all) {
+    if (!f.geometry) continue
+    const k = cell(f)
+    if (!groups.has(k)) groups.set(k, [])
+    groups.get(k).push(f)
+  }
+  let features = [...groups.values()].sort((a, b) => b.length - a.length)[0] || []
+  if (features.length > 50) {
+    // drop the outer 2% each way so a few stray scans don't stretch the frame
+    const first = (f) => (f.geometry.type === 'Polygon' ? f.geometry.coordinates[0][0] : f.geometry.coordinates.flat()[0])
+    const q = (i, p) => first(features.slice().sort((a, b) => first(a)[i] - first(b)[i])[Math.floor(features.length * p)])[i]
+    const [xl, xh, yl, yh] = [q(0, 0.02), q(0, 0.98), q(1, 0.02), q(1, 0.98)]
+    features = features.filter((f) => { const [x, y] = first(f); return x >= xl && x <= xh && y >= yl && y <= yh })
+  }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
   for (const f of features) {
     const g = f.geometry
@@ -64,6 +85,7 @@ export default function BuildingsMap({
   floorGap = 1.2, // explosion gap between floor slices (m), default 1.2m
   onFloorGapChange = null,
   onOvertureSelect = null,
+  frameKey = null, // change it to re-frame the map on the current features (area switched)
 }) {
   const [tileStyle, setTileStyle] = useState('satellite')
   const [timeOfDay, setTimeOfDay] = useState('noon')
@@ -236,8 +258,7 @@ export default function BuildingsMap({
       const p = e.features[0].properties
       const floor = p.floor || 1
       const floorLabel = floor < 0 ? `basement B${-floor}` : `floor ${floor}`
-      // real unit identities win when the building was segmented in the
-      // ULPIN view — otherwise fall back to the deterministic demo identity
+      // unit identities exist once the building was segmented in the ULPIN view
       const generated = peekUnits(p.building_id)
       // section slices carry their own unit_ulpin — show that exact unit
       const mine = p.unit_ulpin ? generated.find((u) => u.unit_ulpin === p.unit_ulpin) : null
@@ -246,12 +267,12 @@ export default function BuildingsMap({
         ? mine.unit_ulpin
         : floorUnits.length
           ? floorUnits[0].unit_ulpin
-          : `${demoBaseUlpin(p.building_id)}-F${floor < 0 ? `B${-floor}` : floor}`
+          : 'not yet assigned'
       const owner = mine
         ? mine.owner_name
         : floorUnits.length
           ? floorUnits[0].owner_name
-          : demoOwner(`${p.building_id}:${floor}`)
+          : 'not registered'
       const pin = digipin(e.lngLat.lat, e.lngLat.lng)
       const subTitle = mine?.subunit_name ? ` (${mine.subunit_name})` : ''
       const subType = mine?.subunit_type ? `<div class="ut-row"><span>type</span><b>${mine.subunit_type}</b></div>` : ''
@@ -389,6 +410,16 @@ export default function BuildingsMap({
       initialFramedRef.current = true
     }
   }, [features])
+
+  // switching area (country / region / scan) flies to it
+  const lastFrameKeyRef = useRef(frameKey)
+  useEffect(() => {
+    if (lastFrameKeyRef.current === frameKey) return
+    lastFrameKeyRef.current = frameKey
+    const map = mapRef.current
+    const bb = map && loadedRef.current ? bboxOf(featuresRef.current) : null
+    if (bb) map.fitBounds(bb, { padding: 60, duration: 1200, maxZoom: 17 })
+  }, [frameKey])
 
   // selection highlight + zoom-to-building: the WHOLE selected building is
   // repainted in a uniform highlight colour (registrar: orange above ground /
