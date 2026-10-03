@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Html, OrbitControls } from '@react-three/drei'
+import { Html, Line, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
+import { footprintMeters } from '../footprint.js'
 
 // A building built from its own records: the real footprint outline, one block per
 // storey, and the unit outlines on the chosen floor, with the citizen's unit lit.
@@ -11,26 +12,10 @@ import * as THREE from 'three'
 
 const FH = 3 // storey height (m)
 const GAP = 0.5 // resting gap between storeys (m)
-const M_PER_DEG = 111320
 const MODES = [['explode', 'Exploded'], ['cutaway', 'Cutaway'], ['xray', 'X-ray'], ['whole', 'Whole']]
 const LOW = new THREE.Color('#D3E6DB')
 const HIGH = new THREE.Color('#6FB894')
 const floorName = (f) => (f < 0 ? `Basement ${-f}` : `Floor ${f}`)
-
-function footprintMeters(geometry) {
-  const ring = geometry?.type === 'Polygon' ? geometry.coordinates[0] : geometry?.coordinates?.[0]?.[0]
-  if (!ring?.length) return null
-  const lons = ring.map((c) => c[0])
-  const lats = ring.map((c) => c[1])
-  const minLon = Math.min(...lons)
-  const minLat = Math.min(...lats)
-  const latMid = (minLat + Math.max(...lats)) / 2
-  const kx = M_PER_DEG * Math.cos((latMid * Math.PI) / 180)
-  const w = Math.max(1, (Math.max(...lons) - minLon) * kx)
-  const d = Math.max(1, (Math.max(...lats) - minLat) * 110540)
-  const pts = ring.map(([lon, lat]) => [(lon - minLon) * kx - w / 2, (lat - minLat) * 110540 - d / 2])
-  return { w, d, pts }
-}
 
 function flatGeometry(points, depth) {
   const g = new THREE.ExtrudeGeometry(new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y))), { depth, bevelEnabled: false })
@@ -95,14 +80,20 @@ function unitGeo(points, depth = FH - 0.25) {
   return geoCache.get(key)
 }
 
-export default function PropertyModel3D({ geometry, units, unit }) {
+// markable: the citizen outlines a disputed area by clicking corners on the open floor.
+// region = { floor, polygon } (corners as 0..1 of the footprint bounding box, like unit polygons);
+// onRegion is told the outline once it has three corners, or null when it is cleared.
+export default function PropertyModel3D({ geometry, units, unit, markable = false, region = null, onRegion = null }) {
   const fp = useMemo(() => footprintMeters(geometry), [geometry])
-  const [mode, setMode] = useState('explode')
+  const [mode, setMode] = useState(markable ? 'cutaway' : 'explode')
   const [floor, setFloor] = useState(unit.floor)
-  const [spin, setSpin] = useState(true)
-  const [picked, setPicked] = useState(false) // true once a floor is chosen: frame it close, otherwise show the whole stack
+  const [spin, setSpin] = useState(!markable)
+  const [corners, setCorners] = useState(region?.polygon || [])
+  const [cornersFloor, setCornersFloor] = useState(region?.floor ?? unit.floor)
+  const [picked, setPicked] = useState(markable) // true once a floor is chosen: frame it close, otherwise show the whole stack
   const controls = useRef()
-  useEffect(() => { setFloor(unit.floor); setPicked(false) }, [unit.floor, unit.ulpin])
+  useEffect(() => { setFloor(unit.floor); setPicked(markable) }, [unit.floor, unit.ulpin]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setCorners(region?.polygon || []); setCornersFloor(region?.floor ?? unit.floor) }, [unit.ulpin]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const block = useMemo(() => (fp ? flatGeometry(fp.pts, FH - 0.25) : null), [fp])
   const plate = useMemo(() => (fp ? flatGeometry(fp.pts, 0.35) : null), [fp])
@@ -127,14 +118,30 @@ export default function PropertyModel3D({ geometry, units, unit }) {
   const labelEvery = Math.max(1, Math.ceil(levels.length / 8))
   const close = picked || mode === 'cutaway'
   const focusY = close ? targetY(floor) + FH / 2 : (targetY(top) + targetY(bottom)) / 2 + FH / 2
-  const dist = close ? reach * 2.6 : Math.max(reach * 2.6, spread * 1.5)
-  const pick = (f) => { setFloor(f); setPicked(true) }
+  const dist = close ? reach * (markable ? 1.45 : 2.6) : Math.max(reach * 2.6, spread * 1.5)
+  const pick = (f) => {
+    setFloor(f); setPicked(true)
+    if (markable && f !== cornersFloor) { setCorners([]); setCornersFloor(f); onRegion?.(null) } // an outline belongs to one floor
+  }
+  const commit = (next, onFloor = floor) => {
+    setCorners(next); setCornersFloor(onFloor)
+    onRegion?.(next.length >= 3 ? { floor: onFloor, polygon: next } : null)
+  }
+  // a click on the open floor: world x and z back to 0..1 of the footprint box (shape y runs along -z)
+  const addCorner = (e) => {
+    e.stopPropagation()
+    const nx = Math.min(1, Math.max(0, (e.point.x + fp.w / 2) / fp.w))
+    const ny = Math.min(1, Math.max(0, (-e.point.z + fp.d / 2) / fp.d))
+    commit(floor === cornersFloor ? [...corners, [nx, ny]] : [[nx, ny]])
+  }
+  const marked = (markable || region) && floor === cornersFloor && corners.length > 0
+  const shapeCorners = corners.map(([x, y]) => [x * fp.w - fp.w / 2, y * fp.d - fp.d / 2])
   const dim = { explode: 0.55, cutaway: 0.96, xray: 0.12, whole: 0.94 }[mode]
 
   return (
     <div className="pm3d">
       <div className="pm3d-stage">
-        <Canvas shadows dpr={[1, 2]} camera={{ position: [dist * 0.55, focusY + dist * 0.3, dist * 0.78], fov: 40, near: 0.1, far: dist * 6 }}>
+        <Canvas shadows dpr={[1, 2]} camera={{ position: markable ? [dist * 0.2, focusY + dist * 0.85, dist * 0.45] : [dist * 0.55, focusY + dist * 0.3, dist * 0.78], fov: 40, near: 0.1, far: dist * 6 }}>
           <ambientLight intensity={0.85} />
           <directionalLight position={[reach, spread + reach, reach]} intensity={1} castShadow />
           <gridHelper args={[reach * 5, 30, '#9DBDAF', '#CFE0D7']} position={[0, yOf(bottom) - 0.05, 0]} />
@@ -145,7 +152,7 @@ export default function PropertyModel3D({ geometry, units, unit }) {
               <Floor key={f} y0={yOf(f)} targetY={targetY(f)}>
                 {open ? (
                   <>
-                    <Prism geo={plate} color="#F3E3B3" edge="#B07812" />
+                    <Prism geo={plate} color="#F3E3B3" edge="#B07812" onClick={markable ? addCorner : undefined} />
                     {here.map((u) => {
                       const mine = u.ulpin === unit.ulpin
                       const pts = poly(u)
@@ -159,6 +166,7 @@ export default function PropertyModel3D({ geometry, units, unit }) {
                             glow={mine ? '#F2B33D' : undefined}
                             opacity={mine ? 1 : 0.8}
                             edge={mine ? '#8A5A05' : '#7FA793'}
+                            onClick={markable ? addCorner : undefined}
                           />
                           {mine && (
                             <>
@@ -174,6 +182,18 @@ export default function PropertyModel3D({ geometry, units, unit }) {
                         </React.Fragment>
                       )
                     })}
+                    {marked && (
+                      <>
+                        {shapeCorners.length >= 3 && <Prism geo={unitGeo(shapeCorners, FH + 0.7)} color="#E5484D" glow="#E5484D" opacity={0.78} edge="#8F1D22" />}
+                        {shapeCorners.length >= 2 && <Line points={[...shapeCorners, shapeCorners[0]].map(([x, y]) => [x, FH + 0.8, -y])} color="#8F1D22" lineWidth={2} />}
+                        {shapeCorners.map(([x, y], i) => (
+                          <mesh key={i} position={[x, FH + 0.9, -y]}>
+                            <sphereGeometry args={[Math.max(0.35, reach / 90), 12, 12]} />
+                            <meshBasicMaterial color={i === 0 ? '#FFFFFF' : '#E5484D'} />
+                          </mesh>
+                        ))}
+                      </>
+                    )}
                   </>
                 ) : (
                   <Prism geo={block} color={shade(f)} opacity={dim} edge="#6E9D86" onClick={(e) => { e.stopPropagation(); pick(f) }} />
@@ -189,7 +209,7 @@ export default function PropertyModel3D({ geometry, units, unit }) {
           <Rig controls={controls} focusY={focusY} dist={dist} spin={spin} viewKey={`${mode}|${floor}|${picked}`} />
           <OrbitControls ref={controls} enableDamping dampingFactor={0.08} autoRotateSpeed={0.9} onStart={() => setSpin(false)} target={[0, focusY, 0]} maxPolarAngle={Math.PI / 2 - 0.05} />
         </Canvas>
-        <p className="pm3d-hint">Drag to turn, scroll to zoom, click a floor to open it.</p>
+        <p className="pm3d-hint">{markable ? 'Click the floor to outline the disputed area. Each click adds a corner.' : 'Drag to turn, scroll to zoom, click a floor to open it.'}</p>
       </div>
       <div className="pm3d-legend">
         <span className="pm3d-modes" role="radiogroup" aria-label="View">
@@ -204,7 +224,13 @@ export default function PropertyModel3D({ geometry, units, unit }) {
         <label>
           <input type="checkbox" checked={spin} onChange={(e) => setSpin(e.target.checked)} /> Spin
         </label>
-        <span className="pm3d-floor">{floorName(floor)}: {here.length ? `${here.length} units` : 'no units on record'}</span>
+        {markable && (
+          <span className="pm3d-mark">
+            <button type="button" className="pm3d-jump" disabled={!corners.length || floor !== cornersFloor} onClick={() => commit(corners.slice(0, -1))}>Undo corner</button>
+            <button type="button" className="pm3d-jump" disabled={!corners.length} onClick={() => commit([])}>Clear</button>
+          </span>
+        )}
+        <span className="pm3d-floor">{floorName(floor)}: {here.length ? `${here.length} units` : 'no units on record'}{markable && (floor === cornersFloor && corners.length ? `. ${corners.length} corner${corners.length === 1 ? '' : 's'} marked${corners.length < 3 ? ', add at least 3' : ''}.` : '. Nothing marked yet.')}</span>
       </div>
     </div>
   )

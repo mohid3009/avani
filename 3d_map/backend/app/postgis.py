@@ -199,6 +199,8 @@ CREATE TABLE IF NOT EXISTS lidar_sessions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE lidar_buildings ADD COLUMN IF NOT EXISTS session_id TEXT;
+-- the area a citizen marked on the 3D model: {floor, polygon (0..1 of the footprint bounding box)}
+ALTER TABLE citizen_complaints ADD COLUMN IF NOT EXISTS region JSONB;
 CREATE INDEX IF NOT EXISTS lidar_buildings_session_idx ON lidar_buildings (session_id);
 UPDATE lidar_buildings SET session_id = COALESCE(job_id, 'legacy')
 WHERE session_id IS NULL;

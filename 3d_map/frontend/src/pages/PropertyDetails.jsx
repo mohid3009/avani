@@ -122,7 +122,6 @@ export default function PropertyDetails() {
               <ShieldCheck size={20} />
             </div>
             <code>{unit.raw?.unit_ulpin_checked || unit.ulpin || unit.unit_ulpin}</code>
-            <p className="muted">The last character is a check character. It lets anyone confirm the ID was not mistyped.</p>
             <EvidenceBadge heightSource={building?.feature?.properties?.height_source} segmentations={(building?.units || []).map((u) => u.raw?.segmentation)} />
           </section>
         </div>

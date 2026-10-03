@@ -13,6 +13,7 @@ import Topbar from './layout/Topbar.jsx'
 import './staff.css'
 import EvidenceBadge from './ui/EvidenceBadge.jsx'
 import StackPanel from './StackPanel.jsx'
+import ReportsPanel from './ui/ReportsPanel.jsx'
 import { MEASURED } from '../portalData.js'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -796,6 +797,7 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
                 <p className={`sp-chip ${measured ? 'is-ok' : 'is-warn'}`}>{heightLabel(selected)}</p>
                 <EvidenceBadge heightSource={selected.height_source} segmentations={peekUnits(selected.building_id).map((u) => u.segmentation)} />
                 <StackPanel feature={visibleFeatures.find((f) => f.properties.building_id === selected.building_id)} />
+                <ReportsPanel buildingId={selected.building_id} geometry={visibleFeatures.find((f) => f.properties.building_id === selected.building_id)?.geometry} />
 
                 <div className="sp-block">
                   <h3 className="sp-h3">Units</h3>

@@ -5,7 +5,9 @@ import {
   Building2, PlusCircle,
 } from 'lucide-react'
 import { citizenProperties, citizenComplaints as loadComplaints, fileComplaint, peekUnits } from '../api.js'
-import { VERIFIED, buildingName } from '../portalData.js'
+import { VERIFIED, buildingName, useBuilding } from '../portalData.js'
+import DisputePicker from './ui/DisputePicker.jsx'
+import RegionPreview from './ui/RegionPreview.jsx'
 import './CitizenDashboard.css'
 
 // ── copy (English is the key; [हिंदी, தமிழ்]) ────────────────────────────────
@@ -482,6 +484,7 @@ export default function CitizenDashboard({ session, onOpenMap, activeLanguage = 
                     </div>
                     <p className="cd-muted">{c.unitId}. {t('Filed on {date}', { date: c.date })}</p>
                     <p className="cd-ticket-desc">{c.description}</p>
+                    {c.region && <TicketRegion complaint={c} />}
                     <ol className="cd-steps" aria-label={t(STEPS[step])}>
                       {STEPS.map((s, i) => (
                         <li key={s} className={i <= step ? 'is-done' : ''} aria-current={i === step ? 'step' : undefined}>
@@ -517,10 +520,23 @@ export default function CitizenDashboard({ session, onOpenMap, activeLanguage = 
   )
 }
 
+// the area the citizen marked, drawn on a plan of the building
+function TicketRegion({ complaint }) {
+  const { data: b } = useBuilding(complaint.buildingId)
+  if (!b) return null
+  return (
+    <div className="cd-ticket-region">
+      <RegionPreview geometry={b.feature.geometry} region={complaint.region} />
+      <p className="cd-muted">{complaint.region.floor < 0 ? `Basement ${-complaint.region.floor}` : `Floor ${complaint.region.floor}`}, area you marked</p>
+    </div>
+  )
+}
+
 function ReportDialog({ t, buildings, initialUnit, floorLabel, onClose, onSent }) {
   const [unit, setUnit] = useState(initialUnit)
   const [issue, setIssue] = useState(ISSUES[0])
   const [details, setDetails] = useState('')
+  const [region, setRegion] = useState(null) // area marked on the 3D model
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -537,7 +553,7 @@ function ReportDialog({ t, buildings, initialUnit, floorLabel, onClose, onSent }
     setError(null)
     try {
       const building = buildings.find((b) => b.units.some((u) => u.unit_ulpin === unit))
-      onSent(await fileComplaint({ unitId: unit, buildingId: building?.id, issueType: issue, description: details.trim() }))
+      onSent(await fileComplaint({ unitId: unit, buildingId: building?.id, issueType: issue, description: details.trim(), region }))
     } catch (err) {
       setError(t('Could not send the report: {msg}', { msg: err.message }))
       setBusy(false)
@@ -576,6 +592,8 @@ function ReportDialog({ t, buildings, initialUnit, floorLabel, onClose, onSent }
             ))}
           </div>
         </fieldset>
+
+        <DisputePicker unitId={unit} region={region} onChange={setRegion} key={unit} />
 
         <label className="cd-field">
           <span>{t('Tell us more')}</span>

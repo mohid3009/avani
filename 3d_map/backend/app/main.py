@@ -796,8 +796,28 @@ def citizen_complaints_add(payload: dict = Body(...)):
         raise HTTPException(400, "subject and description are required")
     return add_complaint(
         p["owner_id"], p["name"], category, subject, description,
-        payload.get("building_id"),
+        payload.get("building_id"), _clean_region(payload.get("region")),
     )
+
+
+def _clean_region(region):
+    """The marked area of a complaint: {floor, polygon} with the polygon inside the footprint box (0..1)."""
+    if not region:
+        return None
+    try:
+        floor = int(region["floor"])
+        pts = [[min(1.0, max(0.0, float(x))), min(1.0, max(0.0, float(y)))] for x, y in region["polygon"]]
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(400, "region must be {floor, polygon: [[x, y], ...]}")
+    if not 3 <= len(pts) <= 60:
+        raise HTTPException(400, "the marked area needs between 3 and 60 corners")
+    return {"floor": floor, "polygon": pts}
+
+
+@app.get("/lidar/complaints")
+def building_complaints(building_id: str = Query(...)):
+    """Citizen reports filed against one building, with any area they marked (surveyor / registrar view)."""
+    return list_complaints(building_id=building_id)
 
 
 @app.post("/citizen/chat")

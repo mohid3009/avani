@@ -6,6 +6,7 @@ import MiniRow from '../components/ui/MiniRow.jsx'
 import StatusPill from '../components/ui/StatusPill.jsx'
 import { fileComplaint } from '../api.js'
 import { useComplaints, useUnit } from '../portalData.js'
+import DisputePicker from '../components/ui/DisputePicker.jsx'
 
 const ISSUE_TYPES = [
   'Boundary mismatch',
@@ -21,6 +22,7 @@ export default function ComplaintForm() {
   const { data: complaints } = useComplaints()
   const [issueType, setIssueType] = useState(ISSUE_TYPES[0])
   const [description, setDescription] = useState('')
+  const [region, setRegion] = useState(null) // area marked on the 3D model
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const citizenComplaints = complaints || []
@@ -47,7 +49,7 @@ export default function ComplaintForm() {
     setBusy(true)
     let ticketId
     try {
-      ticketId = await fileComplaint({ unitId: unit.id, buildingId: unit.building.id, issueType, description })
+      ticketId = await fileComplaint({ unitId: unit.id, buildingId: unit.building.id, issueType, description, region })
     } catch (err) {
       setError(`Could not submit: ${err.message}`)
       setBusy(false)
@@ -86,6 +88,9 @@ export default function ComplaintForm() {
             ))}
           </select>
         </label>
+        <div className="mt-3">
+          <DisputePicker unitId={unit.id} region={region} onChange={setRegion} />
+        </div>
         <label className="block mt-3">
           <span className="text-[10px] uppercase tracking-wide text-ink-mid">Description</span>
           <textarea

@@ -95,7 +95,7 @@ def profile(name=None, owner_id=None):
 
 # ---------------- complaints ----------------
 
-def add_complaint(citizen_id, citizen_name, category, subject, description, building_id=None):
+def add_complaint(citizen_id, citizen_name, category, subject, description, building_id=None, region=None):
     """Persist a complaint — Postgres first, in-memory fallback for demos."""
     h = _digest(f"{citizen_id}:{subject}:{datetime.utcnow().isoformat()}")
     ticket = f"CMP-{int(h[0:6], 16) % 900000 + 100000}"
@@ -109,22 +109,24 @@ def add_complaint(citizen_id, citizen_name, category, subject, description, buil
                 cur.execute(
                     """INSERT INTO citizen_complaints
                        (ticket_id, citizen_id, citizen_name, building_id, category,
-                        subject, description, status, created_at, updated_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'submitted', %s, %s)""",
+                        subject, description, status, created_at, updated_at, region)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'submitted', %s, %s, %s)""",
                     (ticket, citizen_id, citizen_name, building_id, category,
-                     subject, description, now, now),
+                     subject, description, now, now, json.dumps(region) if region else None),
                 )
     except Exception:
         _MEM_COMPLAINTS.append({
             "ticket_id": ticket, "citizen_id": citizen_id, "citizen_name": citizen_name,
             "building_id": building_id, "category": category, "subject": subject,
             "description": description, "status": "submitted",
-            "created_at": now, "updated_at": now,
+            "created_at": now, "updated_at": now, "region": region,
         })
     return {"ticket_id": ticket, "status": "submitted", "created_at": now}
 
 
-def list_complaints(citizen_id):
+def list_complaints(citizen_id=None, building_id=None):
+    """A citizen's complaints, or every complaint filed against one building (staff view)."""
+    where, arg = ("citizen_id = %s", citizen_id) if citizen_id else ("building_id = %s", building_id)
     try:
         from .postgis import _conn, ensure_init
 
@@ -132,11 +134,11 @@ def list_complaints(citizen_id):
         with _conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT ticket_id, citizen_id, citizen_name, building_id, category,
-                              subject, description, status, created_at, updated_at
-                       FROM citizen_complaints WHERE citizen_id = %s
+                    f"""SELECT ticket_id, citizen_id, citizen_name, building_id, category,
+                              subject, description, status, created_at, updated_at, region
+                       FROM citizen_complaints WHERE {where}
                        ORDER BY created_at DESC""",
-                    (citizen_id,),
+                    (arg,),
                 )
                 rows = cur.fetchall()
         return [
@@ -146,11 +148,12 @@ def list_complaints(citizen_id):
                 "description": r[6], "status": r[7],
                 "created_at": r[8].isoformat() if r[8] else None,
                 "updated_at": r[9].isoformat() if r[9] else None,
+                "region": r[10],
             }
             for r in rows
         ]
     except Exception:
-        return [c for c in _MEM_COMPLAINTS if c["citizen_id"] == citizen_id]
+        return [c for c in _MEM_COMPLAINTS if (c["citizen_id"] == citizen_id if citizen_id else c["building_id"] == building_id)]
 
 
 # ---------------- properties / taxes ----------------

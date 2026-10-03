@@ -743,6 +743,7 @@ const toComplaint = (c) => ({
   description: c.description,
   status: c.status,
   date: (c.created_at || '').slice(0, 10),
+  region: c.region || null, // area marked on the 3D model: { floor, polygon }
 })
 
 export const citizenComplaints = async () => {
@@ -751,12 +752,16 @@ export const citizenComplaints = async () => {
   return (await req(`/citizen/complaints?owner_id=${encodeURIComponent(me)}`)).map(toComplaint)
 }
 
-export const fileComplaint = async ({ unitId, buildingId, issueType, description }) => {
+export const fileComplaint = async ({ unitId, buildingId, issueType, description, region = null }) => {
   const res = await post('/citizen/complaints', {
-    owner_id: myOwnerId(), subject: unitId, building_id: buildingId, category: issueType, description,
+    owner_id: myOwnerId(), subject: unitId, building_id: buildingId, category: issueType, description, region,
   })
   return res.ticket_id
 }
+
+// every citizen report filed against one building (surveyor / registrar view)
+export const buildingComplaints = async (buildingId) =>
+  (await req(`/lidar/complaints?building_id=${encodeURIComponent(buildingId)}`)).map(toComplaint)
 
 export const getBuilding = (buildingId) => req(`/lidar/buildings/${encodeURIComponent(buildingId)}`)
 
