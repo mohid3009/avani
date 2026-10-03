@@ -17,7 +17,7 @@ export default function UnifiedPropertyCard() {
   if (!b) {
     return (
       <div className="max-w-[640px]">
-        <Breadcrumb current="Unified Property Card" />
+        <Breadcrumb current="Parcel record" />
         <div className="bg-surface border border-line rounded-[14px] p-6 text-sm text-ink-mid">
           Parcel not found.{' '}
           <Link to="/portal/records" className="text-[#176B55] font-semibold">Back to records</Link>
@@ -30,7 +30,7 @@ export default function UnifiedPropertyCard() {
   const firstUnit = b.units[0]
   return (
     <div className="max-w-[640px]">
-      <Breadcrumb current="Unified Property Card" />
+      <Breadcrumb current="Parcel record" />
       <button onClick={() => navigate(-1)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-mid hover:text-ink mb-2 mt-2">
         <ArrowLeft size={13} /> Back
       </button>
@@ -68,11 +68,11 @@ export default function UnifiedPropertyCard() {
 
         <div className="flex flex-col sm:flex-row gap-2.5 mt-3">
           <button
-            onClick={() => firstUnit && navigate(`/portal/passport/${firstUnit.id}`)}
+            onClick={() => firstUnit && navigate(`/portal/card/${encodeURIComponent(firstUnit.id)}`)}
             disabled={!firstUnit}
             className="flex-1 inline-flex items-center justify-center gap-2 bg-[#176B55] text-white text-xs font-bold rounded-[10px] px-3 py-2.5 hover:bg-[#0F5442] disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
           >
-            <ShieldCheck size={15} /> Official UPC Certificate &amp; Deed
+            <ShieldCheck size={15} /> Unified Property Card
           </button>
           <button
             onClick={() => navigate(`/portal/building/${b.id}/3d`)}
@@ -97,7 +97,7 @@ export default function UnifiedPropertyCard() {
                   {u.status}
                 </StatusPill>
               }
-              onClick={() => navigate(`/portal/passport/${u.id}`)}
+              onClick={() => navigate(`/portal/card/${encodeURIComponent(u.id)}`)}
               last={i === b.units.length - 1}
             />
           ))}

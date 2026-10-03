@@ -1,5 +1,5 @@
 import { useNavigate, useOutletContext } from 'react-router-dom'
-import { Globe, Bell, Shield, HelpCircle, LogOut, ArrowLeft } from 'lucide-react'
+import { Globe, LogOut, ArrowLeft } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
 import { useProfile } from '../portalData.js'
 
@@ -8,13 +8,6 @@ export default function Profile({ onLogout: propLogout }) {
   const outlet = useOutletContext()
   const onLogout = propLogout || outlet?.onLogout || (() => {})
   const { data: profile, loading } = useProfile()
-
-  const settings = [
-    { icon: <Globe size={16} />, label: 'Language', value: 'English' },
-    { icon: <Bell size={16} />, label: 'Notifications', value: 'On' },
-    { icon: <Shield size={16} />, label: 'Privacy & Data', value: 'Coming soon' },
-    { icon: <HelpCircle size={16} />, label: 'Help & Support', value: 'Coming soon' },
-  ]
 
   if (loading) return <div className="loading muted">loading profile…</div>
   if (!profile) return <div className="loading muted">Sign in as a citizen to see your profile.</div>
@@ -37,36 +30,10 @@ export default function Profile({ onLogout: propLogout }) {
         </div>
       </div>
 
-      <div className="bg-surface border border-line rounded-[14px] p-4 mt-4">
-        <h3 className="text-sm font-bold text-ink mb-3">Linked identity</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <div className="text-[10px] uppercase tracking-wide text-ink-mid mb-0.5">Aadhaar</div>
-            <div className="text-sm font-bold text-ink font-id">{profile.aadhaar}</div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wide text-ink-mid mb-0.5">Mobile</div>
-            <div className="text-sm font-bold text-ink font-id">{profile.phone}</div>
-          </div>
-        </div>
-        <p className="text-[11px] text-ink-soft mt-3">
-          Demo citizen registry record — not linked to Aadhaar or DigiLocker.
-        </p>
-      </div>
-
-      <div className="bg-surface border border-line rounded-[14px] p-2 mt-4">
-        {settings.map((s, i) => (
-          <div
-            key={s.label}
-            className={`w-full flex items-center gap-3 px-3 py-3 rounded-[10px] ${
-              i === settings.length - 1 ? '' : 'border-b border-dashed border-line'
-            }`}
-          >
-            <span className="text-ink-mid">{s.icon}</span>
-            <span className="text-sm font-medium text-ink">{s.label}</span>
-            <span className="ml-auto text-xs text-ink-mid">{s.value}</span>
-          </div>
-        ))}
+      <div className="bg-surface border border-line rounded-[14px] px-4 py-3 mt-4 flex items-center gap-3">
+        <Globe size={16} className="text-ink-mid" />
+        <span className="text-sm font-medium text-ink">Language</span>
+        <span className="ml-auto text-sm font-semibold text-ink">{localStorage.getItem('avani-language') || 'English'}</span>
       </div>
 
       <button

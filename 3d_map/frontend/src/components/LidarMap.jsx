@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Map as MapLibreMap, NavigationControl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { getExtractionStatus, getSavedStatus, startExtraction, syncSavedBuildings } from '../api.js'
@@ -26,12 +27,19 @@ const TILES = {
 const EMPTY_FC = { type: 'FeatureCollection', features: [] }
 
 export default function LidarMap({ canEdit = true, user = null }) {
+  // "Rescan this area" from the dashboard opens this page with the area filled in
+  const [params] = useSearchParams()
+  const rescan = useMemo(() => {
+    const box = (params.get('rescan') || '').split(',').map(Number)
+    if (box.length !== 4 || box.some((n) => !isFinite(n))) return null
+    return { box, name: params.get('name') || 'this area', count: Number(params.get('count')) || 0 }
+  }, [params])
   const [lazFile, setLazFile] = useState(null)
   const [hasLidar, setHasLidar] = useState(true) // "LiDAR data available?" toggle
   const [footprintsFile, setFootprintsFile] = useState(null)
   const [sourceMode, setSourceMode] = useState('osm') // 'osm' | 'footprints'
-  const [bbox, setBbox] = useState({ xmin: '', ymin: '', xmax: '', ymax: '' })
-  const [bboxCrs, setBboxCrs] = useState('laz') // 'laz' = same CRS as the .laz file
+  const [bbox, setBbox] = useState(() => (rescan ? { xmin: String(rescan.box[0]), ymin: String(rescan.box[1]), xmax: String(rescan.box[2]), ymax: String(rescan.box[3]) } : { xmin: '', ymin: '', xmax: '', ymax: '' }))
+  const [bboxCrs, setBboxCrs] = useState(rescan ? 'wgs84' : 'laz') // 'laz' = same CRS as the .laz file
   const [fpCrs, setFpCrs] = useState('wgs84') // footprint GeoJSON coords: 'laz' = same CRS as the .laz file
   const [epsg, setEpsg] = useState('')
   const [floorHeight, setFloorHeight] = useState('3.0')
@@ -219,7 +227,17 @@ export default function LidarMap({ canEdit = true, user = null }) {
         )
         if (r.session_id) sessionIdRef.current = r.session_id
         dirtyRef.current = false
-        setPostgisMsg(`saved to PostGIS · session ${r.session_id} (${r.count} buildings)`)
+        const c = r.conflation
+        if (c?.id_map) {
+          // re-scanned buildings keep the registry's id: rename them here so later edits and syncs stay in step
+          const rename = (f) => (c.id_map[f.properties.building_id] ? { ...f, properties: { ...f.properties, building_id: c.id_map[f.properties.building_id] } } : f)
+          setFeatures((prev) => prev.map(rename))
+          originalsRef.current = new Map([...originalsRef.current.values()].map((f) => { const g = rename(f); return [g.properties.building_id, g] }))
+          setSelectedId((id) => c.id_map[id] || id)
+        }
+        setPostgisMsg(c?.matched
+          ? `saved · ${c.matched} buildings matched the registry and kept their IDs, ${c.new} new, survey shifted ${Math.hypot(...c.offset_m).toFixed(1)} m${c.heights_kept ? `, ${c.heights_kept} measured heights kept` : ''}`
+          : `saved to PostGIS · session ${r.session_id} (${r.count} buildings)`)
       } catch (e) {
         setPostgisMsg(`PostGIS sync failed: ${e.message}`)
       }
@@ -796,6 +814,15 @@ export default function LidarMap({ canEdit = true, user = null }) {
       </section>
 
       <aside className="sidebar">
+        {rescan && (
+          <div className="panel-section rescan-note">
+            <h3>rescanning {rescan.name}</h3>
+            <p className="muted tiny">
+              The area is filled in below{rescan.count ? `, ${rescan.count} registered ${rescan.count === 1 ? 'building is' : 'buildings are'} inside it` : ''}. When you save, buildings that match
+              the registry keep their IDs, units and owners, and measured heights are kept unless this scan measures them again.
+            </p>
+          </div>
+        )}
         <div className="panel-section">
           <h3>data source</h3>
           <div className="upload-row">

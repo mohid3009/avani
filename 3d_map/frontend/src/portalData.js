@@ -9,12 +9,18 @@ import {
 } from './api.js'
 
 // registry statuses that count as a clean title
+// unnamed buildings get a short, stable label
+export const buildingName = (p) => p.name || `Building ${String(p.building_id).slice(-4)}`
 export const VERIFIED = new Set(['valid', 'confirmed', 'verified'])
+// height sources that are real measurements, not estimates
+export const MEASURED = new Set(['lidar', 'google-open-buildings-2.5d', 'surveyor-verified', 'registrar-approved', 'tag-height'])
 const toStatus = (s) => (s === 'conflict' ? 'conflict' : VERIFIED.has(s) ? 'verified' : 'review')
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '—')
 
 const EXTRACTION = {
   lidar: 'LiDAR point-cloud measurement',
+  'google-open-buildings-2.5d': 'Google Open Buildings 2.5D (2023)',
+  'tag-height': 'Height tag in the map data',
   'surveyor-verified': 'Surveyor-verified measurement',
   'registrar-approved': 'Registrar-approved measurement',
 }
@@ -31,7 +37,7 @@ function toBuilding(feature, units) {
   const c = centroid(feature.geometry)
   const b = {
     id: p.building_id,
-    name: p.name || p.building_id,
+    name: buildingName(p),
     baseUlpin: units[0]?.base_ulpin || 'not yet assigned',
     // no postal address in the dataset — the DIGIPIN is the precise address code
     address: c && digipin(c.lat, c.lon) !== '—' ? `DIGIPIN ${digipin(c.lat, c.lon)}` : 'outside DIGIPIN coverage',
@@ -109,4 +115,23 @@ export function useComplaints() {
   const [version, setVersion] = useState(0)
   const state = useAsync(citizenComplaints, [version])
   return { ...state, reload: () => setVersion((v) => v + 1) }
+}
+
+// sharing: checked ID, public verify link, DIGIPIN of a unit
+export const checkedId = (u) => u.raw?.unit_ulpin_checked || u.ulpin
+
+export const verifyUrl = (code) => `${window.location.origin}/verify/${encodeURIComponent(code)}`
+
+// DIGIPIN (with floor) of the middle of the unit; the unit polygon is normalized to the footprint bounding box
+export function digipinOf(geometry, polygon, floor) {
+  const ring = geometry?.type === 'Polygon' ? geometry.coordinates[0] : geometry?.coordinates?.[0]?.[0]
+  if (!ring?.length) return '—'
+  const xs = ring.map((p) => p[0])
+  const ys = ring.map((p) => p[1])
+  const [x0, y0] = [Math.min(...xs), Math.min(...ys)]
+  const [w, h] = [Math.max(...xs) - x0, Math.max(...ys) - y0]
+  const pts = polygon?.length ? polygon : [[0.5, 0.5]]
+  const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length
+  const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length
+  return digipin(y0 + cy * h, x0 + cx * w, floor)
 }

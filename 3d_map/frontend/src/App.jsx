@@ -1,17 +1,17 @@
 import React, { Suspense, lazy, useEffect } from 'react'
-import { Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
+import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { SESSION_KEY } from './constants.js'
 import Landing from './components/Landing.jsx'
 import Login from './components/Login.jsx'
 const Dashboard = lazy(() => import('./components/Dashboard.jsx'))
 const Building3DView = lazy(() => import('./pages/Building3DView.jsx'))
 import Topbar from './components/layout/Topbar.jsx'
-import Sidebar from './components/layout/Sidebar.jsx'
-import PropertyPassport from './pages/PropertyPassport.jsx'
 import PropertyDetails from './pages/PropertyDetails.jsx'
 import ComplaintForm from './pages/ComplaintForm.jsx'
 import PropertyRecords from './pages/PropertyRecords.jsx'
 import UnifiedPropertyCard from './pages/UnifiedPropertyCard.jsx'
+import UnitUpc from './pages/UnitUpc.jsx'
+import Verify from './pages/Verify.jsx'
 import Profile from './pages/Profile.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 
@@ -50,7 +50,6 @@ function PageShell({ session, onLogout, activeLanguage, onLanguageChange, maxW =
         onLanguageChange={onLanguageChange}
       />
       <div className="citizen-shell-body flex min-w-0 flex-1">
-        {session?.role === 'citizen' && <Sidebar onLogout={onLogout} />}
         <main className="flex-1 min-w-0 p-5 w-full mx-auto" style={{ maxWidth: maxW }}>
           {children}
         </main>
@@ -111,12 +110,15 @@ export default function App() {
       <Route path="/landing" element={<Home session={session} setSession={updateSession} />} />
       <Route path="/login"   element={<LoginRoute session={session} setSession={updateSession} />} />
 
+      {/* Public: the page every UPC QR code opens */}
+      <Route path="/verify/:code" element={<Verify />} />
+
       {/* Main dashboard */}
       <Route path="/dashboard" element={<Dashboard session={session} {...sharedProps} />} />
 
-      {/* Property passport — accessible via two URL shapes */}
-      <Route path="/passport/:id"        element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="1100px"><PropertyPassport /></PageShell></Only>} />
-      <Route path="/portal/passport/:id" element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="1100px"><PropertyPassport /></PageShell></Only>} />
+      {/* the old passport links now open the Unified Property Card */}
+      <Route path="/passport/:id" element={<ToRor />} />
+      <Route path="/portal/passport/:id" element={<ToRor />} />
 
       <Route path="/portal/building/:id/3d" element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps}><Building3DView /></PageShell></Only>} />
       {/* Portal pages */}
@@ -124,6 +126,7 @@ export default function App() {
       <Route path="/portal/records"      element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="1100px"><PropertyRecords /></PageShell></Only>} />
       <Route path="/portal/upc/:id"      element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="800px"><UnifiedPropertyCard /></PageShell></Only>} />
       <Route path="/portal/report/:unitId" element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="800px"><ComplaintForm /></PageShell></Only>} />
+      <Route path="/portal/card/:unitId" element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="760px"><UnitUpc /></PageShell></Only>} />
       <Route path="/portal/profile"      element={<Only session={session} roles={['citizen']}><PageShell session={session} {...sharedProps} maxW="800px"><Profile onLogout={() => updateSession(null)} /></PageShell></Only>} />
 
       {/* 3D ULPIN view — lazy-loaded, wrapped in ErrorBoundary */}
@@ -205,6 +208,11 @@ export default function App() {
 }
 
 // ── route-level components ────────────────────────────────────────────────────
+
+function ToRor() {
+  const { id } = useParams()
+  return <Navigate to={`/portal/card/${encodeURIComponent(id)}`} replace />
+}
 
 function Home({ session, setSession }) {
   const navigate = useNavigate()

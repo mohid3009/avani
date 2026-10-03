@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { Building2, Cloud, FileText, Globe2, Image, Layers, ScanLine } from 'lucide-react'
 import CubeMark from '../CubeMark.jsx'
@@ -16,13 +16,7 @@ export default function Topbar({ session, onLogout, activeLanguage = 'English', 
   const isCitizen   = session?.role === 'citizen'
   const isRegistrar = session?.role === 'registrar'
   const isSurveyor  = session?.role === 'surveyor'
-  const [q, setQ]   = useState('')
   const navigate    = useNavigate()
-
-  const handleSearch = (e) => {
-    e.preventDefault()
-    if (q.trim()) navigate(`/passport/${encodeURIComponent(q.trim())}`)
-  }
 
   const roleName    = ROLE_LABELS[session?.role || 'citizen'] || 'Citizen'
   const displayName = session?.name || (isRegistrar ? 'Registrar 1' : isSurveyor ? 'Surveyor 1' : 'Citizen 1')
@@ -114,19 +108,7 @@ export default function Topbar({ session, onLogout, activeLanguage = 'English', 
         )}
       </nav>
 
-      {/* Registrar search box or citizen quick-search are injected via children */}
       {children}
-      {isCitizen && !children && (
-        <form onSubmit={handleSearch} className="top-search citizen-top-search">
-          <input
-            className="search"
-            placeholder="Search ULPIN / property ID…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            aria-label="Search ULPIN or property ID"
-          />
-        </form>
-      )}
 
       {isCitizen && (
         <label className="topbar-language" title="Choose language">
@@ -144,8 +126,7 @@ export default function Topbar({ session, onLogout, activeLanguage = 'English', 
         </label>
       )}
 
-      {/* One portal per sign-in: no role switching, staff sign out here. */}
-      <span className="topbar-role" title={`Signed in as ${roleName}`}>{roleName}</span>
+      {/* One portal per sign-in: no role switching. */}
       {isCitizen ? (
         <button
           className="avatar-btn"
@@ -156,8 +137,9 @@ export default function Topbar({ session, onLogout, activeLanguage = 'English', 
           {initials}
         </button>
       ) : (
-        <button className="btn" onClick={onLogout} title={`Signed in as ${displayName}`}>Sign out</button>
+        <span className="topbar-role" title={`Signed in as ${displayName}`}>{roleName}</span>
       )}
+      <button className="btn" onClick={onLogout}>Sign out</button>
     </header>
   )
 }

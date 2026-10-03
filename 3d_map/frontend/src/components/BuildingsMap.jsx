@@ -86,7 +86,11 @@ export default function BuildingsMap({
   onFloorGapChange = null,
   onOvertureSelect = null,
   frameKey = null, // change it to re-frame the map on the current features (area switched)
+  onFirstDraw = null, // called once the buildings have been painted for the first time
 }) {
+  const drawnRef = useRef(false)
+  const onFirstDrawRef = useRef(onFirstDraw)
+  onFirstDrawRef.current = onFirstDraw
   const [tileStyle, setTileStyle] = useState('satellite')
   const [timeOfDay, setTimeOfDay] = useState('noon')
   const [drawMode, setDrawMode] = useState(false)
@@ -221,10 +225,16 @@ export default function BuildingsMap({
     })
     map.addControl(new NavigationControl({ visualizePitch: true }), 'top-left')
 
+    // tell the page when the buildings are on screen; never keep its loading overlay up for more than 8 s,
+    // even when the base-map tiles or a slow graphics card hold the map back
+    const fire = () => { if (!drawnRef.current) { drawnRef.current = true; onFirstDrawRef.current?.() } }
+    const fallback = setTimeout(fire, 8000)
+
     map.on('load', () => {
       loadedRef.current = true
       map.getSource('buildings')?.setData({ type: 'FeatureCollection', features: renderRef.current })
       map.getSource('shadows')?.setData({ type: 'FeatureCollection', features: shadowsRef.current })
+      map.once('idle', fire)
       const bb = bboxOf(featuresRef.current)
       if (bb) map.fitBounds(bb, { padding: 60, duration: 1400, maxZoom: 17 })
     })
@@ -359,7 +369,7 @@ export default function BuildingsMap({
     })
 
     mapRef.current = map
-    return () => { map.remove(); mapRef.current = null; loadedRef.current = false }
+    return () => { clearTimeout(fallback); map.remove(); mapRef.current = null; loadedRef.current = false }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // follow unit-store changes (generate / clear / registrar edits)

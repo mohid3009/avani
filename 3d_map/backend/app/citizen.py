@@ -3,7 +3,7 @@ Citizen portal data layer for the Layerd mobile app.
 
 Everything a citizen sees on the phone is derived from the same PostGIS
 records the surveyors produce: their properties are the ULPIN units the
-demo owner registry assigned them (`ulpin.py` — Ramesh Iyer is OWN-0001),
+demo owner registry assigned them (`ulpin.py` — Citizen 1 is OWN-0001),
 their taxes are computed deterministically from unit area, and complaints
 get their own table (with an in-memory fallback when the DB is down).
 
@@ -20,7 +20,7 @@ from .digipin import digipin_encode, digipin_format
 # ₹ per sqm of unit area per financial year (demo rate)
 TAX_RATE_PER_SQM = 8.0
 
-DEMO_CITIZEN = ("OWN-0001", "Ramesh Iyer")
+DEMO_CITIZEN = ("OWN-0001", "Citizen 1")
 
 # demo small-holding accounts: cap how many buildings each citizen sees.
 # "kavitha" logs in as Kavitha Raman and sees only her first 2 properties.

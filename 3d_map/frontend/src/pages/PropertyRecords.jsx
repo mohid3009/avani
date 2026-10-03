@@ -4,6 +4,7 @@ import { Search, Building2, MapPin, ArrowLeft } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
 import MiniRow from '../components/ui/MiniRow.jsx'
 import StatusPill from '../components/ui/StatusPill.jsx'
+import VerifyId from '../components/ui/VerifyId.jsx'
 import { myOwnerId } from '../api.js'
 import { useRegisteredBuildings } from '../portalData.js'
 
@@ -65,6 +66,8 @@ export default function PropertyRecords() {
           />
         </div>
       </div>
+
+      <VerifyId />
 
       <div className="flex gap-2 mt-3 flex-wrap">
         {CHIPS.map((c) => (

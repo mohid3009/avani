@@ -1,14 +1,12 @@
 import { Suspense, lazy, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import {
-  AlertTriangle, ArrowLeft, Box, Building2, CalendarDays, FileText,
-  Layers, MapPin, Ruler, ShieldCheck, UserRound,
-} from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Box, Building2, MapPin, ShieldCheck } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
 import DetailGrid from '../components/ui/DetailGrid.jsx'
 import MapInset from '../components/ui/MapInset.jsx'
 import StatusPill from '../components/ui/StatusPill.jsx'
 import { useUnit } from '../portalData.js'
+import EvidenceBadge from '../components/ui/EvidenceBadge.jsx'
 import ErrorBoundary from '../components/ErrorBoundary.jsx'
 
 // three.js loads only when a property page opens
@@ -72,7 +70,7 @@ export default function PropertyDetails() {
               </div>
               <div className="pm3d-tabs" role="tablist">
                 <button role="tab" aria-selected={view === '3d'} onClick={() => setView('3d')}>3D view</button>
-                <button role="tab" aria-selected={view === 'map'} onClick={() => setView('map')}>Map</button>
+                <button role="tab" aria-selected={view === 'map'} onClick={() => setView('map')}>On map</button>
               </div>
             </div>
             {view === '3d' ? (
@@ -88,13 +86,12 @@ export default function PropertyDetails() {
                 ulpin={building?.baseUlpin || unit.ulpin}
                 address={building?.address || 'Chennai'}
                 label={unit.unitLabel}
+                heightM={building?.feature?.properties?.height_m ?? (building?.feature?.properties?.stories || 1) * 3}
+                floorNo={unit.floor}
+                unitPolygon={unit.raw?.polygon}
               />
             )}
-            <p className="property-map-note">
-              {view === '3d'
-                ? 'Your unit is lit yellow on its floor. The other floors of the building are shown as slabs.'
-                : 'The highlighted footprint shows the registered parcel associated with this unit.'}
-            </p>
+            {view !== '3d' && <p className="property-map-note">Your floor is the pale band and your unit is yellow. Right-drag to tilt, Ctrl and scroll to zoom.</p>}
           </section>
 
           <section className="property-detail-section">
@@ -106,12 +103,11 @@ export default function PropertyDetails() {
             </div>
             <DetailGrid
               fields={[
-                { label: 'Registered Owner', value: unit.owner || 'Citizen' },
-                { label: 'Unit & Floor', value: `${unit.unitLabel || 'Unit'} · Floor ${unit.floor ?? 1}` },
+                { label: 'Registered Owner', value: unit.owner },
+                { label: 'Unit & Floor', value: `${unit.unitLabel} · ${unit.floor < 0 ? `Basement ${-unit.floor}` : `Floor ${unit.floor}`}` },
                 { label: 'Carpet Area', value: `${area} m² (~${Math.round(area * 10.764)} sq.ft)` },
-                { label: 'Rights Category', value: unit.rightsType || 'Freehold Title' },
-                { label: 'Encumbrance', value: verified ? 'Nil · Clear title' : 'Review in progress' },
-                { label: 'Last Updated', value: unit.lastUpdated || '2026-09-01' },
+                { label: 'Rights Category', value: unit.rightsType },
+                ...(unit.lastUpdated && unit.lastUpdated !== '—' ? [{ label: 'Last Updated', value: unit.lastUpdated }] : []),
               ]}
               columns={2}
             />
@@ -125,17 +121,18 @@ export default function PropertyDetails() {
               </div>
               <ShieldCheck size={20} />
             </div>
-            <code>{unit.ulpin || unit.unit_ulpin}</code>
+            <code>{unit.raw?.unit_ulpin_checked || unit.ulpin || unit.unit_ulpin}</code>
+            <p className="muted">The last character is a check character. It lets anyone confirm the ID was not mistyped.</p>
+            <EvidenceBadge heightSource={building?.feature?.properties?.height_source} segmentations={(building?.units || []).map((u) => u.raw?.segmentation)} />
           </section>
         </div>
 
         <aside className="property-detail-aside">
           <section className="property-action-panel">
             <h2>Property services</h2>
-            <p>Open official records or report a discrepancy.</p>
-            <button className="property-action primary" onClick={() => navigate(`/passport/${encodeURIComponent(unit.id || unit.ulpin)}`)}>
+            <button className="property-action primary" onClick={() => navigate(`/portal/card/${encodeURIComponent(unit.id || unit.ulpin)}`)}>
               <ShieldCheck size={17} />
-              <span><strong>Digital Passport</strong><small>Verified deed and QR record</small></span>
+              <span><strong>Unified Property Card</strong><small>Document with a QR code to share</small></span>
             </button>
             <button className="property-action" onClick={() => navigate(`/portal/building/${building?.id}/3d`)} disabled={!building?.id}>
               <Box size={17} />
@@ -146,19 +143,6 @@ export default function PropertyDetails() {
               <span><strong>Report a Problem</strong><small>Area, owner, or boundary issue</small></span>
             </button>
           </section>
-
-          <section className="property-summary-panel">
-            <h2>At a glance</h2>
-            <div><Ruler size={15} /><span>Area</span><strong>{area} m²</strong></div>
-            <div><Layers size={15} /><span>Floor</span><strong>{unit.floor ?? 1}</strong></div>
-            <div><UserRound size={15} /><span>Ownership</span><strong>{unit.rightsType || 'Owned'}</strong></div>
-            <div><CalendarDays size={15} /><span>Updated</span><strong>{unit.lastUpdated || 'Sep 2026'}</strong></div>
-          </section>
-
-          <div className="property-help-card">
-            <FileText size={18} />
-            <div><strong>Need help reading this record?</strong><p>Use Help & Support from Profile & Settings.</p></div>
-          </div>
         </aside>
       </div>
     </div>

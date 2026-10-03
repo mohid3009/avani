@@ -302,6 +302,10 @@ export const citizenProperties = async () => {
   }))
 }
 
+// ── ID verification and the vertical column at a location ───────────────────
+export const verifyUlpin = (code) => req(`/ulpin/verify?code=${encodeURIComponent(code)}`)
+export const probeColumn = (lon, lat) => req(`/lidar/column?lon=${lon}&lat=${lat}`)
+
 // ── 3D ULPIN units ───────────────────────────────────────────────────────────
 // GET /lidar/units segments a building on first request (YOLO plan or mock grid).
 export const fetchUnits = async (buildingId) => {

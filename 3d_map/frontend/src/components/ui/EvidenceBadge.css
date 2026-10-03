@@ -1,0 +1,4 @@
+.ev { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ev li { padding: 3px 9px; border: 1px dashed currentColor; border-radius: 999px; font-size: 12px; font-weight: 600; opacity: 0.6; }
+.ev li.is-on { border-style: solid; border-color: #176B55; background: #E3F1EA; color: #0F5442; opacity: 1; }
+.ev-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

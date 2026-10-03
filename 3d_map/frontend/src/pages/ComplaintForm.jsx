@@ -53,7 +53,7 @@ export default function ComplaintForm() {
       setBusy(false)
       return
     }
-    navigate(`/portal/passport/${unit.id}`, {
+    navigate(`/portal/card/${encodeURIComponent(unit.id)}`, {
       state: { toast: `Complaint ${ticketId} filed — the registry will respond within 7 days.` },
     })
   }
@@ -62,10 +62,10 @@ export default function ComplaintForm() {
     <div className="max-w-[640px]">
       <Breadcrumb current="Report Issue" />
       <Link
-        to={`/portal/passport/${unit.id}`}
+        to={`/portal/card/${encodeURIComponent(unit.id)}`}
         className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-mid hover:text-ink mb-2"
       >
-        <ArrowLeft size={13} /> Back to passport
+        <ArrowLeft size={13} /> Back to record
       </Link>
       <h1 className="text-xl font-extrabold text-ink">Report an Issue</h1>
       <p className="text-sm text-ink-mid mt-0.5 mb-4">

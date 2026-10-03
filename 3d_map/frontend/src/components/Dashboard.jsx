@@ -10,8 +10,10 @@ import {
 import BuildingsMap from './BuildingsMap.jsx'
 import CitizenDashboard from './CitizenDashboard.jsx'
 import Topbar from './layout/Topbar.jsx'
-import Sidebar from './layout/Sidebar.jsx'
 import './staff.css'
+import EvidenceBadge from './ui/EvidenceBadge.jsx'
+import StackPanel from './StackPanel.jsx'
+import { MEASURED } from '../portalData.js'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,7 +44,6 @@ const HEIGHT_SOURCE = {
   edited: 'Footprint edited',
   manual: 'Drawn manually',
 }
-const MEASURED = new Set(['lidar', 'google-open-buildings-2.5d', 'surveyor-verified', 'registrar-approved', 'tag-height'])
 const heightLabel = (p) => {
   const label = HEIGHT_SOURCE[p.height_source] || 'Estimated from building type'
   return p.height_source === 'google-open-buildings-2.5d' && p.height_year ? `${label} (${p.height_year})` : label
@@ -68,6 +69,7 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
 
   const [state, setState]               = useState('loading') // loading | ready | empty | unavailable
   const [features, setFeatures]         = useState([])
+  const [drawn, setDrawn]               = useState(false) // the map has painted the buildings at least once
   const [sessions, setSessions]         = useState([])
   const [focusSid, setFocusSid]         = useState(null)   // focused session inside a region
   const [regionData, setRegionData]     = useState({})     // cluster key -> { country, region }
@@ -93,6 +95,7 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
   useEffect(() => {
     let cancelled = false
     setState('loading')
+    setDrawn(false)
     Promise.all([getSavedBuildings(), getSessions()])
       .then(([fc, ss]) => {
         if (cancelled) return
@@ -220,6 +223,13 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
     return features
   }, [features, focusSid, visibleSids])
 
+  // open the scan page with this set of buildings (plus a margin, so neighbours help line the survey up)
+  const rescanArea = (feats, name) => {
+    const pts = feats.flatMap((f) => (f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates[0][0]))
+    const pad = 0.002
+    const box = [Math.min(...pts.map((p) => p[0])) - pad, Math.min(...pts.map((p) => p[1])) - pad, Math.max(...pts.map((p) => p[0])) + pad, Math.max(...pts.map((p) => p[1])) + pad].map((n) => n.toFixed(6))
+    navigate(`/lidar?rescan=${box.join(',')}&name=${encodeURIComponent(name)}${feats.length > 1 ? `&count=${feats.length}` : ''}`)
+  }
   const focusSession  = (sid) => setFocusSid((cur) => (cur === sid ? null : sid))
   const removeSession = (sid) => {
     deleteSession(sid)
@@ -619,7 +629,6 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
           onLanguageChange={onLanguageChange}
         />
         <div className="citizen-shell-body flex min-w-0">
-          <Sidebar onLogout={onLogout} />
           <CitizenDashboard
             session={session}
             activeLanguage={activeLanguage}
@@ -730,12 +739,22 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
               onFootprintDrawn={handleFootprintDrawn}
               ownedIds={ownedIds}
               frameKey={`${selCountry}|${selRegion}|${focusSid}`}
+              onFirstDraw={() => setDrawn(true)}
             />
           )}
           {state === 'ready' && !visibleFeatures.length && (
             <div className="map-note muted tiny">no buildings in this view — go back to all areas</div>
           )}
-          {state === 'loading' && <div className="loading muted">loading the city…</div>}
+          {(state === 'loading' || (state === 'ready' && !drawn && visibleFeatures.length > 0)) && (
+            <div className="map-loading" role="status" aria-live="polite">
+              <div className="map-loading-card">
+                <span className="map-loading-spinner" aria-hidden="true" />
+                <strong>{state === 'loading' ? 'Loading buildings' : `Drawing ${visibleFeatures.length.toLocaleString('en-IN')} buildings`}</strong>
+                <span>{state === 'loading' ? 'Fetching them from the registry' : 'Putting them on the map'}</span>
+                <span className="map-loading-bar" aria-hidden="true" />
+              </div>
+            </div>
+          )}
           {state === 'empty' && (
             <div className="lidar-empty muted">
               <h3>No buildings yet</h3>
@@ -775,6 +794,8 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
                   <div><dt>Basements</dt><dd>{selected.basements || 0}</dd></div>
                 </dl>
                 <p className={`sp-chip ${measured ? 'is-ok' : 'is-warn'}`}>{heightLabel(selected)}</p>
+                <EvidenceBadge heightSource={selected.height_source} segmentations={peekUnits(selected.building_id).map((u) => u.segmentation)} />
+                <StackPanel feature={visibleFeatures.find((f) => f.properties.building_id === selected.building_id)} />
 
                 <div className="sp-block">
                   <h3 className="sp-h3">Units</h3>
@@ -788,6 +809,10 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
                           : `${us.total} estimated units. No floor plan has been processed yet.`}
                     {us.conflicts > 0 && ` ${us.conflicts} overlap and need fixing.`}
                   </p>
+                  <button className="btn sp-wide"
+                    onClick={() => rescanArea(visibleFeatures.filter((f) => f.properties.building_id === selected.building_id), selected.name || 'this building')}>
+                    Rescan this area
+                  </button>
                   <button className="btn primary sp-wide"
                     onClick={() => navigate(`/ulpin?building=${encodeURIComponent(selected.building_id)}`)}>
                     {!canEditBuildings ? 'View units' : us.fromModel ? 'Open unit editor' : 'Extract units from floor plan'}
@@ -906,7 +931,15 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
           })()}
 
           {/* ── registrar: one review list ────────────────────────────── */}
-          {!selected && isRegistrar && work && (
+          {state === 'loading' && !selected && (
+            <section className="sp-card" aria-busy="true" aria-label="Loading">
+              <span className="sp-skel" style={{ width: '40%', height: 18 }} />
+              <span className="sp-skel" style={{ width: '90%' }} />
+              <span className="sp-skel" style={{ width: '75%' }} />
+              <span className="sp-skel" style={{ width: '85%' }} />
+            </section>
+          )}
+          {!selected && state === 'ready' && isRegistrar && work && (
             <>
               <section className="sp-card">
                 <h2 className="sp-title">To review</h2>
@@ -1028,7 +1061,7 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
           )}
 
           {/* ── surveyor: what to do next ─────────────────────────────── */}
-          {!selected && isSurveyor && work && (
+          {!selected && state === 'ready' && isSurveyor && work && (
             <>
               <section className="sp-card">
                 <h2 className="sp-title">Your work</h2>
@@ -1123,6 +1156,8 @@ function DashboardContent({ session, onLogout, activeLanguage, onLanguageChange 
                 <button className="sp-row" onClick={() => focusSession(sc.sid)} title={sc.label}>
                   <span>{sc.label}</span><span className="sp-muted">{focusSid === sc.sid ? 'showing' : `${sc.count}`}</span>
                 </button>
+                <button className="sp-icon" title="Rescan this area" aria-label={`Rescan ${sc.label}`}
+                  onClick={() => rescanArea(features.filter((f) => f.properties.session_id === sc.sid), sc.label)}>↻</button>
                 {isRegistrar && (
                   <button className="sp-icon" title="Delete this scan and its buildings"
                     onClick={() => { if (window.confirm(`Delete scan "${sc.label}" and its ${sc.count} buildings?`)) removeSession(sc.sid) }}>×</button>

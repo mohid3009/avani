@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { AttributionControl, Map as MapLibreMap, NavigationControl } from 'maplibre-gl'
+import { AttributionControl, LngLatBounds, Map as MapLibreMap, NavigationControl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 const MAP_STYLE = {
@@ -16,6 +16,8 @@ const MAP_STYLE = {
       type: 'geojson',
       data: { type: 'FeatureCollection', features: [] },
     },
+    floor: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+    unit: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
   },
   layers: [
     { id: 'imagery', type: 'raster', source: 'imagery' },
@@ -24,6 +26,24 @@ const MAP_STYLE = {
       type: 'fill',
       source: 'property',
       paint: { 'fill-color': '#176B55', 'fill-opacity': 0.42 },
+    },
+    {
+      id: 'building-3d',
+      type: 'fill-extrusion',
+      source: 'property',
+      paint: { 'fill-extrusion-color': '#6FB894', 'fill-extrusion-height': ['coalesce', ['get', 'h'], 0], 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.72, 'fill-extrusion-vertical-gradient': true },
+    },
+    {
+      id: 'floor-3d',
+      type: 'fill-extrusion',
+      source: 'floor',
+      paint: { 'fill-extrusion-color': '#F3E3B3', 'fill-extrusion-height': ['get', 'top'], 'fill-extrusion-base': ['get', 'base'], 'fill-extrusion-opacity': 0.95 },
+    },
+    {
+      id: 'unit-3d',
+      type: 'fill-extrusion',
+      source: 'unit',
+      paint: { 'fill-extrusion-color': '#F2B33D', 'fill-extrusion-height': ['get', 'top'], 'fill-extrusion-base': ['get', 'base'], 'fill-extrusion-opacity': 1 },
     },
     {
       id: 'property-outline',
@@ -42,19 +62,26 @@ function boundsForGeometry(geometry) {
       : []
   if (!coordinates.length) return null
 
-  const bounds = coordinates.reduce(
-    (result, [longitude, latitude]) => result.extend([longitude, latitude]),
-    [[coordinates[0][0], coordinates[0][1]], [coordinates[0][0], coordinates[0][1]]],
-  )
-  return bounds
+  return coordinates.reduce((bounds, [lon, lat]) => bounds.extend([lon, lat]), new LngLatBounds(coordinates[0], coordinates[0]))
 }
 
-export default function MapInset({ geometry, highlightUnit = false, ulpin, address, label }) {
+// the unit's polygon is normalized to the footprint's bounding box; put it back on the map
+function unitOnMap(polygon, geometry) {
+  const ring = geometry?.type === 'Polygon' ? geometry.coordinates[0] : geometry?.coordinates?.[0]?.[0]
+  if (!ring?.length || !polygon?.length) return null
+  const xs = ring.map((p) => p[0])
+  const ys = ring.map((p) => p[1])
+  const [x0, y0] = [Math.min(...xs), Math.min(...ys)]
+  const [w, h] = [Math.max(...xs) - x0, Math.max(...ys) - y0]
+  return { type: 'Polygon', coordinates: [polygon.map(([x, y]) => [x0 + x * w, y0 + y * h])] }
+}
+
+export default function MapInset({ geometry, highlightUnit = false, ulpin, address, label, heightM = 0, floorNo = null, unitPolygon = null, floorHeight = 3 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const propertyFeature = useMemo(
-    () => (geometry ? { type: 'Feature', properties: {}, geometry } : null),
-    [geometry],
+    () => (geometry ? { type: 'Feature', properties: { h: heightM }, geometry } : null),
+    [geometry, heightM],
   )
 
   useEffect(() => {
@@ -65,10 +92,12 @@ export default function MapInset({ geometry, highlightUnit = false, ulpin, addre
       style: MAP_STYLE,
       center: [80.23, 13.04],
       zoom: 15,
+      pitch: 58,
+      bearing: -25,
       attributionControl: false,
-      interactive: false,
+      cooperativeGestures: true, // ctrl + scroll to zoom, so the page can still scroll
     })
-    map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+    map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right')
     map.addControl(new AttributionControl({ compact: true }), 'bottom-right')
     mapRef.current = map
 
@@ -86,13 +115,18 @@ export default function MapInset({ geometry, highlightUnit = false, ulpin, addre
       map.resize()
       const source = map.getSource('property')
       if (source) source.setData({ type: 'FeatureCollection', features: [propertyFeature] })
+      // the unit's floor as a band through the building, and the unit itself inside it
+      const band = floorNo >= 1 ? { base: (floorNo - 1) * floorHeight, top: floorNo * floorHeight } : null
+      const fc = (g, extra) => ({ type: 'FeatureCollection', features: g && extra ? [{ type: 'Feature', properties: extra, geometry: g }] : [] })
+      map.getSource('floor')?.setData(fc(propertyFeature.geometry, band))
+      map.getSource('unit')?.setData(fc(unitOnMap(unitPolygon, propertyFeature.geometry), band))
       const bounds = boundsForGeometry(propertyFeature.geometry)
-      if (bounds) map.fitBounds(bounds, { padding: 48, maxZoom: 18, duration: 0 })
+      if (bounds) map.fitBounds(bounds, { padding: 70, maxZoom: 18, pitch: 58, bearing: -25, duration: 0 })
     }
 
     if (map.isStyleLoaded()) update()
     else map.once('load', update)
-  }, [propertyFeature])
+  }, [propertyFeature, floorNo, unitPolygon, floorHeight])
 
   return (
     <div className="property-map-inset">

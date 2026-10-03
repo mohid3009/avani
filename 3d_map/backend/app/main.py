@@ -27,7 +27,7 @@ VALID_ROLES = {"citizen", "surveyor", "registrar"}
 
 # Role views for the demo â€” swap for real auth in production.
 DEMO_ACCOUNTS = {
-    "citizen":   {"username": "ramesh",  "password": "citizen123",  "name": "Ramesh Iyer"},
+    "citizen":   {"username": "ramesh",  "password": "citizen123",  "name": "Citizen 1"},
     "surveyor":  {"username": "priya",   "password": "survey123",   "name": "Priya Venkatesan"},
     "registrar": {"username": "arun",    "password": "register123", "name": "Arun Krishnan"},
 }
@@ -204,9 +204,29 @@ def lidar_sync_buildings(payload: dict = Body(...)):
     fc = payload.get("buildings")
     if not isinstance(fc, dict) or fc.get("type") != "FeatureCollection":
         raise HTTPException(400, "body must contain a FeatureCollection under 'buildings'")
-    session_id = payload.get("session_id") or uuid.uuid4().hex[:12]
+    from .conflate import adopt_ids
+
+    session_id = payload.get("session_id")
+    report = None
+    if not session_id and fc.get("features"):
+        # first save of a new scan: line it up with what is already registered so
+        # re-scanned buildings keep their ids (and with them their ULPIN, units, owners)
+        try:
+            r, old = _conflate_with_registry(fc)
+        except Exception as exc:  # never lose a scan because matching failed
+            r, old = None, None
+            report = {"error": str(exc)}
+        if r and r["matches"]:
+            fc = adopt_ids(fc, r, old)
+            report = {
+                "matched": len(r["matches"]), "new": len(r["unmatched_new"]),
+                "offset_m": r["offset_m"], "iou_mean": r["iou_mean"],
+                "heights_kept": sum(1 for f in fc["features"] if f["properties"].get("height_kept")),
+                "id_map": r["matches"],  # scan id -> registry id
+            }
+    session_id = session_id or uuid.uuid4().hex[:12]
     count = save_buildings(fc, session_id=session_id, label=payload.get("label"), reconcile=True)
-    return {"status": "ok", "session_id": session_id, "count": count}
+    return {"status": "ok", "session_id": session_id, "count": count, "conflation": report}
 
 
 @app.delete("/lidar/buildings/{building_id}")
@@ -322,6 +342,37 @@ def _footprint_size_m(feat):
     return width, depth
 
 
+def _normalized_footprint(feat):
+    """The footprint as a shapely polygon in 0..1 bounding-box coordinates (what unit polygons use)."""
+    from shapely.geometry import Polygon as ShPolygon
+
+    geom = feat["geometry"]
+    ring = geom["coordinates"][0] if geom["type"] == "Polygon" else geom["coordinates"][0][0]
+    xs = [p[0] for p in ring]
+    ys = [p[1] for p in ring]
+    w = max(max(xs) - min(xs), 1e-12)
+    h = max(max(ys) - min(ys), 1e-12)
+    return ShPolygon([((x - min(xs)) / w, (y - min(ys)) / h) for x, y in ring]).buffer(0)
+
+
+def _clip_to_outline(poly, outline):
+    """poly (closed 0..1 ring) clipped to the outline; None when too little of it is inside."""
+    from shapely.geometry import Polygon as ShPolygon
+
+    cell = ShPolygon(poly[:-1]).buffer(0)
+    inter = cell.intersection(outline)
+    if inter.is_empty:
+        return None
+    if inter.geom_type != "Polygon":
+        parts = [g for g in getattr(inter, "geoms", []) if g.geom_type == "Polygon"]
+        if not parts:
+            return None
+        inter = max(parts, key=lambda g: g.area)
+    if inter.area < 0.15 * cell.area:  # a sliver is not a flat
+        return None
+    return [list(c) for c in inter.simplify(0.002).exterior.coords]
+
+
 def _floor_units(building_id, feat, floor_index, seg):
     """Turn one floor's segmentation into ULPIN unit records (+ overlap check)."""
     from itertools import combinations
@@ -332,11 +383,17 @@ def _floor_units(building_id, feat, floor_index, seg):
 
     base = base_ulpin(building_id)
     width, depth = _footprint_size_m(feat)
+    outline = _normalized_footprint(feat)
     units = []
     for j, part in enumerate(seg["units"], start=1):
         ulp = unit_ulpin(base, floor_index, j)
         owner = owner_for(ulp, floor_index)
         poly = part["polygon"]
+        if seg["source"] == "estimated":
+            # the estimated grid covers the bounding box: keep only the part inside the real outline
+            poly = _clip_to_outline(poly, outline)
+            if poly is None:
+                continue  # entirely outside the building; unit numbers of the others stay put
         area = ShPolygon([[x * width, y * depth] for x, y in poly[:-1]]).buffer(0).area
         units.append({
             "unit_ulpin": ulp,
@@ -399,6 +456,118 @@ def ulpin_units_for_building(building_id: str = Query(...)):
     units = [u for f in _floor_range(floors, basements) for u in _floor_units(building_id, feat, f, seg)]
     save_units(building_id, units)
     return {"building_id": building_id, "units": units}
+
+
+@app.post("/lidar/conflate")
+def lidar_conflate(payload: dict, adopt: bool = Query(False, description="return the footprints with matched ids replaced by the registry's")):
+    """
+    Line a new set of footprints (a re-scan or another source) up with the registry:
+    estimates the survey offset, matches buildings one-to-one, reports what is new or gone.
+    With adopt=true the returned features keep the registry's building_id where matched,
+    so base ULPIN, units and owners survive the re-survey. Nothing is saved here.
+    """
+    from .conflate import adopt_ids
+
+    fc = payload.get("buildings") or payload
+    if not fc.get("features"):
+        raise HTTPException(400, "send a GeoJSON FeatureCollection of footprints with building_id properties")
+    r, old = _conflate_with_registry(fc)
+    return {**r, "features": adopt_ids(fc, r, old)["features"]} if adopt else r
+
+
+def _conflate_with_registry(fc):
+    """(match report, nearby registry buildings) for a FeatureCollection of new footprints."""
+    from shapely.geometry import shape
+
+    from .conflate import match
+    from .postgis import fetch_buildings
+
+    boxes = [shape(f["geometry"]).bounds for f in fc["features"]]
+    pad = 0.0005  # ~50 m
+    x0, y0 = min(b[0] for b in boxes) - pad, min(b[1] for b in boxes) - pad
+    x1, y1 = max(b[2] for b in boxes) + pad, max(b[3] for b in boxes) + pad
+    old = fetch_buildings()
+    old["features"] = [f for f in old["features"] if (lambda b: b[2] >= x0 and b[0] <= x1 and b[3] >= y0 and b[1] <= y1)(shape(f["geometry"]).bounds)]
+    if not old["features"]:
+        return {"matches": {}, "offset_m": [0, 0], "votes": 0, "unmatched_new": [f["properties"]["building_id"] for f in fc["features"]], "unmatched_old": 0, "iou_mean": 0.0}, old
+    return match(fc, old), old
+
+
+@app.get("/ulpin/verify")
+def ulpin_verify(code: str = Query(...)):
+    """Check a unit ID that carries its check character, then look it up in the registry."""
+    from .postgis import fetch_unit
+    from .ulpin import is_valid, split_check
+
+    ulpin, check = split_check(code)
+    if check is None:
+        return {"status": "missing_check", "message": "This ID has no check character at the end (the last letter or digit after the final dash)."}
+    if not is_valid(f"{ulpin}-{check}"):
+        return {"status": "bad_checksum", "message": "The check character does not match, so the ID was mistyped or altered."}
+    unit = fetch_unit(ulpin)
+    if unit is None:
+        return {"status": "unknown", "ulpin": ulpin, "message": "The ID is well formed but no unit with it is registered."}
+    return {"status": "verified", "ulpin": ulpin, "unit": unit}
+
+
+def _unit_at_point(units, feat, lon, lat):
+    """The unit (of one floor's list) whose polygon contains the point, or None."""
+    from shapely.geometry import Point, Polygon as ShPolygon
+
+    ring = feat["geometry"]["coordinates"][0]
+    xs = [p[0] for p in ring]
+    ys = [p[1] for p in ring]
+    nx = (lon - min(xs)) / max(max(xs) - min(xs), 1e-12)  # unit polygons are normalized to the footprint bbox
+    ny = (lat - min(ys)) / max(max(ys) - min(ys), 1e-12)
+    pt = Point(nx, ny)
+    return next((u for u in units if ShPolygon(u["polygon"][:-1]).buffer(0).contains(pt)), None)
+
+
+def _column(lon, lat):
+    from .postgis import building_at, fetch_units
+
+    feat = building_at(lon, lat)
+    if feat is None:
+        return None, []
+    props = feat["properties"]
+    fh = float(props.get("floor_height") or 3.0)
+    by_floor = {}
+    for u in fetch_units(props["building_id"]):
+        by_floor.setdefault(u["floor_index"], []).append(u)
+    rows = []
+    for f in sorted(by_floor):
+        z0 = (f - 1) * fh if f > 0 else f * fh  # floor 1 sits on the ground, basement -1 just below it
+        u = _unit_at_point(by_floor[f], feat, lon, lat)
+        rows.append({
+            "floor_index": f, "z_from": round(z0, 2), "z_to": round(z0 + fh, 2),
+            "space": "unit" if u else "common area",
+            "unit": u and {k: u[k] for k in ("unit_ulpin", "unit_ulpin_checked", "unit_no", "owner_name", "rights_type", "area_sqm", "segmentation")},
+        })
+    return feat, rows
+
+
+@app.get("/lidar/column")
+def lidar_column(lon: float = Query(...), lat: float = Query(...)):
+    """The whole vertical stack at a location, basement to roof."""
+    feat, rows = _column(lon, lat)
+    if feat is None:
+        return {"found": False, "message": "No registered building at this location."}
+    p = feat["properties"]
+    return {"found": True, "building": {"building_id": p["building_id"], "name": p.get("name"), "stories": p.get("stories"), "height_m": p.get("height_m")}, "column": rows}
+
+
+@app.get("/lidar/at")
+def lidar_at(lon: float = Query(...), lat: float = Query(...), z: float = Query(0.0, description="metres above ground")):
+    """What is registered at one 3D point."""
+    feat, rows = _column(lon, lat)
+    if feat is None:
+        return {"found": False, "message": "No registered building at this location."}
+    hit = next((r for r in rows if r["z_from"] <= z < r["z_to"]), None)
+    top = max((r["z_to"] for r in rows), default=0)
+    if hit is None:
+        space = "air space above the building" if z >= top else "no registered space at this height"
+        return {"found": True, "building_id": feat["properties"]["building_id"], "space": space, "z": z}
+    return {"found": True, "building_id": feat["properties"]["building_id"], "z": z, **hit}
 
 
 @app.delete("/lidar/units")
@@ -546,7 +715,7 @@ async def ulpin_units_generate_floor(
 # Per-citizen views: own profile, own properties (derived from ULPIN unit
 # ownership), building status, property taxes, complaints and a help chatbot.
 # Identity is demo-grade: resolved by ?name= or ?owner_id=, defaulting to the
-# demo citizen (Ramesh Iyer / OWN-0001).
+# demo citizen (Citizen 1 / OWN-0001).
 
 from .citizen import (
     add_complaint,

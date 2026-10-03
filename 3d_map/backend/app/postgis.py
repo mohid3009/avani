@@ -19,6 +19,8 @@ import os
 import threading
 from contextlib import contextmanager
 
+from .ulpin import with_check
+
 try:
     import psycopg2
     import psycopg2.extras
@@ -565,9 +567,31 @@ def _unit_row(building_id, u):
     )
 
 
+def building_at(lon, lat):
+    """The saved building whose footprint contains this point (one with units first, then smallest), or None."""
+    if not _pg_up():
+        return None
+    ensure_init()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT building_id, session_id, props, ST_AsGeoJSON(geom) FROM lidar_buildings "
+                "WHERE ST_Contains(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) "
+                "ORDER BY EXISTS (SELECT 1 FROM ulpin_units u WHERE u.building_id = lidar_buildings.building_id) DESC, "
+                "ST_Area(geom) LIMIT 1",
+                (lon, lat),
+            )
+            r = cur.fetchone()
+    if not r:
+        return None
+    return {"type": "Feature", "properties": {**r[2], "session_id": r[1], "building_id": r[0]}, "geometry": json.loads(r[3])}
+
+
 def _unit_from_row(r):
     # r = (building_id, props, *_UNIT_COLS)
-    return {**(r[1] or {}), "building_id": r[0], **dict(zip(_UNIT_COLS, r[2:]))}
+    u = {**(r[1] or {}), "building_id": r[0], **dict(zip(_UNIT_COLS, r[2:]))}
+    u["unit_ulpin_checked"] = with_check(u["unit_ulpin"])
+    return u
 
 
 _UNIT_SELECT = "SELECT building_id, props, " + ", ".join(_UNIT_COLS) + " FROM ulpin_units"
@@ -633,6 +657,18 @@ def fetch_all_units():
         with conn.cursor() as cur:
             cur.execute(_UNIT_SELECT + " ORDER BY building_id, floor_index, unit_no")
             return [_unit_from_row(r) for r in cur.fetchall()]
+
+
+def fetch_unit(unit_ulpin):
+    """One unit by its ULPIN, or None."""
+    if not _pg_up():
+        return next((u for u in fetch_all_units() if u["unit_ulpin"] == unit_ulpin), None)
+    ensure_init()
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_UNIT_SELECT + " WHERE unit_ulpin = %s", (unit_ulpin,))
+            r = cur.fetchone()
+    return _unit_from_row(r) if r else None
 
 
 def delete_units(building_id):

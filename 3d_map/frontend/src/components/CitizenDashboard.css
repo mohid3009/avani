@@ -138,9 +138,17 @@
 .cd-action.is-brick .cd-action-icon { background: var(--cd-brick-soft); color: var(--cd-brick); }
 
 /* ── what's new + questions ──────────────────────────────── */
-.cd-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 .cd-panel { padding: 20px 22px; border: 1px solid var(--cd-line); border-radius: 18px; background: #fff; }
 .cd-panel .cd-h2 { margin-bottom: 12px; }
+.cd-help { padding: 0 22px; }
+.cd-help > summary {
+  display: flex; align-items: center; gap: 8px; padding: 16px 0; cursor: pointer; list-style: none;
+  font-family: var(--cd-display); font-size: 16px; font-weight: 700;
+}
+.cd-help > summary::-webkit-details-marker { display: none; }
+.cd-help > summary .cd-chev { margin-left: auto; }
+.cd-help[open] > summary .cd-chev { transform: rotate(180deg); }
+.cd-help[open] { padding-bottom: 8px; }
 .cd-news-item { display: flex; gap: 12px; padding: 10px 0; }
 .cd-news-item + .cd-news-item { border-top: 1px dashed var(--cd-line); }
 .cd-news-text { font-size: 14px; font-weight: 600; line-height: 1.4; }
@@ -248,3 +256,8 @@
   .cd-tabs { width: 100%; justify-content: space-between; }
   .cd-tab { padding: 8px 12px; }
 }
+
+/* a single friendly wave on arrival */
+.cd-wave { display: inline-block; transform-origin: 70% 70%; animation: cd-wave 1.6s ease-in-out 0.5s 1 both; }
+@keyframes cd-wave { 0%, 60%, 100% { transform: rotate(0); } 10%, 30%, 50% { transform: rotate(16deg); } 20%, 40% { transform: rotate(-8deg); } }
+@media (prefers-reduced-motion: reduce) { .cd-wave { animation: none; } }
