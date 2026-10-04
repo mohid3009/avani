@@ -1,0 +1,11 @@
+# What the hosted server needs. Floor-plan extraction (ultralytics) and the one-off heights
+# script (earthengine-api) are left out: without them units show as estimated, and the heights
+# script is run from your own machine (see requirements.txt for the full list).
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+shapely>=2.0.0
+python-multipart>=0.0.9
+laspy[lazrs]>=2.5.0
+pyproj>=3.6.0
+numpy>=1.26.0
+psycopg2-binary>=2.9.0

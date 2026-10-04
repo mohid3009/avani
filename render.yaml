@@ -1,10 +1,13 @@
 services:
   - type: web
-    name: sih11-demo-backend
-    env: docker
-    region: singapore # Adjust if needed
+    name: avani
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
-      # Note: Render automatically provides DATABASE_URL if you attach a Postgres DB to this service.
-      # Without it, the backend will safely fallback to the local JSON file database.
+      # Paste the Neon connection string (ending ?sslmode=require) in the Render dashboard.
+      - key: DATABASE_URL
+        sync: false
