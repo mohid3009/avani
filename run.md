@@ -74,3 +74,16 @@ Unit ownership comes from the backend's deterministic owner registry
 
 `scripts/convert_chennai.cjs` turns a raw Overpass dump (`chennai_raw.json`) into
 `3d_map/backend/seed/chennai_buildings.json`; re-run `python seed_chennai.py` afterwards.
+
+## Frontend-only hosting (free demo, no backend)
+
+`npm run build:demo` (in `3d_map/frontend`) builds the app so it needs no server: a small stand-in
+(`src/demo/demoServer.js`) answers the `/api` calls in the browser from a snapshot of the registry in
+`public/demo/*.json`. Buildings, units, UPC cards, ID verification, complaints and the proposal
+workflow all work; changes a visitor makes stay in that visitor's browser. Scans, rescans and floor-plan
+extraction need the real server and answer with a message.
+
+Refresh the snapshot after changing the database: `cd 3d_map/backend && python export_demo_data.py`.
+
+Host it on Vercel (or any static host): import the repo, set **Root Directory** to `3d_map/frontend`;
+`vercel.json` already sets the build command (`npm run build:demo`) and output (`dist`).

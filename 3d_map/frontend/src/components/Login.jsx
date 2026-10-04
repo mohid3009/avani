@@ -128,6 +128,7 @@ export default function Login({ onLogin, onBack, initialRole = 'citizen' }) {
 
         <div className="login-hint tiny muted">
           demo credentials pre-filled per role — {active.username} / {active.password}
+          {import.meta.env.VITE_STATIC_DEMO && <><br />Hosted demo: a snapshot of the registry. Changes you make stay in this browser.</>}
         </div>
       </form>
     </div>
