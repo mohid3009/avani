@@ -6119,3 +6119,10 @@ body.modal-scroll-lock { overflow: hidden; }
 .region-preview { display: block; margin-top: 4px; border-radius: 8px; background: #fff; }
 .sp-report { padding: 8px 0; border-top: 1px dashed rgba(255, 255, 255, 0.14); }
 .cd-ticket-region { margin: 8px 0; }
+
+/* Cesium globe tab */
+.cesium-box { position: relative; height: 420px; border-radius: 14px; overflow: hidden; background: #0B1F1A; }
+.cesium-box .cesium-viewer-bottom { opacity: 0.9; }
+@media (max-width: 640px) { .cesium-box { height: 340px; } }
+.cesium-wrap { position: relative; }
+.cesium-cover { position: absolute; inset: 0; height: auto; z-index: 5; }

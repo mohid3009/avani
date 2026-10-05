@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { AttributionControl, LngLatBounds, Map as MapLibreMap, NavigationControl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+import { unitOnMap } from '../../footprint.js'
 
 const MAP_STYLE = {
   version: 8,
@@ -63,17 +64,6 @@ function boundsForGeometry(geometry) {
   if (!coordinates.length) return null
 
   return coordinates.reduce((bounds, [lon, lat]) => bounds.extend([lon, lat]), new LngLatBounds(coordinates[0], coordinates[0]))
-}
-
-// the unit's polygon is normalized to the footprint's bounding box; put it back on the map
-function unitOnMap(polygon, geometry) {
-  const ring = geometry?.type === 'Polygon' ? geometry.coordinates[0] : geometry?.coordinates?.[0]?.[0]
-  if (!ring?.length || !polygon?.length) return null
-  const xs = ring.map((p) => p[0])
-  const ys = ring.map((p) => p[1])
-  const [x0, y0] = [Math.min(...xs), Math.min(...ys)]
-  const [w, h] = [Math.max(...xs) - x0, Math.max(...ys) - y0]
-  return { type: 'Polygon', coordinates: [polygon.map(([x, y]) => [x0 + x * w, y0 + y * h])] }
 }
 
 export default function MapInset({ geometry, highlightUnit = false, ulpin, address, label, heightM = 0, floorNo = null, unitPolygon = null, floorHeight = 3 }) {

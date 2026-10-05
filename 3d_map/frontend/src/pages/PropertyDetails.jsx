@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, Box, Building2, MapPin, ShieldCheck } from 'lucide-react'
 import Breadcrumb from '../components/ui/Breadcrumb.jsx'
 import DetailGrid from '../components/ui/DetailGrid.jsx'
+import CesiumView from '../components/ui/CesiumView.jsx'
 import MapInset from '../components/ui/MapInset.jsx'
 import StatusPill from '../components/ui/StatusPill.jsx'
 import { useUnit } from '../portalData.js'
@@ -71,6 +72,7 @@ export default function PropertyDetails() {
               <div className="pm3d-tabs" role="tablist">
                 <button role="tab" aria-selected={view === '3d'} onClick={() => setView('3d')}>3D view</button>
                 <button role="tab" aria-selected={view === 'map'} onClick={() => setView('map')}>On map</button>
+                <button role="tab" aria-selected={view === 'globe'} onClick={() => setView('globe')}>Globe</button>
               </div>
             </div>
             {view === '3d' ? (
@@ -79,6 +81,13 @@ export default function PropertyDetails() {
                   <PropertyModel3D geometry={building?.feature?.geometry} units={building?.units || []} unit={unit} />
                 </Suspense>
               </ErrorBoundary>
+            ) : view === 'globe' ? (
+              <CesiumView
+                geometry={building?.feature?.geometry}
+                heightM={building?.feature?.properties?.height_m ?? (building?.feature?.properties?.stories || 1) * 3}
+                floorNo={unit.floor}
+                unitPolygon={unit.raw?.polygon}
+              />
             ) : (
               <MapInset
                 highlightUnit
@@ -91,7 +100,8 @@ export default function PropertyDetails() {
                 unitPolygon={unit.raw?.polygon}
               />
             )}
-            {view !== '3d' && <p className="property-map-note">Your floor is the pale band and your unit is yellow. Right-drag to tilt, Ctrl and scroll to zoom.</p>}
+            {view === 'map' && <p className="property-map-note">Your floor is the pale band and your unit is yellow. Right-drag to tilt, Ctrl and scroll to zoom.</p>}
+            {view === 'globe' && <p className="property-map-note">Your floor is the pale band and your unit is yellow. Drag to turn, scroll to zoom.</p>}
           </section>
 
           <section className="property-detail-section">

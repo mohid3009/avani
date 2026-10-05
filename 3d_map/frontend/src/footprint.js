@@ -15,3 +15,14 @@ export function footprintMeters(geometry) {
   const pts = ring.map(([lon, lat]) => [(lon - minLon) * kx - w / 2, (lat - minLat) * 110540 - d / 2])
   return { w, d, pts }
 }
+
+// The unit polygon is normalized to the footprint bounding box; put it back on the map as a lon/lat polygon.
+export function unitOnMap(polygon, geometry) {
+  const ring = geometry?.type === 'Polygon' ? geometry.coordinates[0] : geometry?.coordinates?.[0]?.[0]
+  if (!ring?.length || !polygon?.length) return null
+  const xs = ring.map((p) => p[0])
+  const ys = ring.map((p) => p[1])
+  const [x0, y0] = [Math.min(...xs), Math.min(...ys)]
+  const [w, h] = [Math.max(...xs) - x0, Math.max(...ys) - y0]
+  return { type: 'Polygon', coordinates: [polygon.map(([x, y]) => [x0 + x * w, y0 + y * h])] }
+}
