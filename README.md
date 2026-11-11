@@ -43,6 +43,14 @@ The hosted demo is frontend-only: a small in-browser stand-in for the API (`src/
 serves a snapshot of the registry, and changes you make stay in your browser. Scans, rescans and
 floor-plan extraction need the real backend.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Landing page](docs/screenshots/01-landing.png)<br>**Landing** | ![Citizen dashboard](docs/screenshots/02-citizen-dashboard.png)<br>**Citizen dashboard** — units stacked by building |
+| ![Property records](docs/screenshots/03-records.png)<br>**Registry** — ULPIN, DIGIPIN, ID check | ![Parcel record](docs/screenshots/04-parcel-record.png)<br>**Parcel record** — units per floor, satellite footprint |
+| ![Exploded 3D building](docs/screenshots/05-building-3d.png)<br>**Vertical mapping** — one slice per storey, selected unit highlighted | ![City map](docs/screenshots/06-city-map.png)<br>**City map** — tilted satellite view of T. Nagar |
+
 ## Architecture
 
 ```
