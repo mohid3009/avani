@@ -13,6 +13,17 @@ if (!pmtilesRegistered) {
   pmtilesRegistered = true
 }
 
+// Overture deletes old releases, so a pinned URL 404s eventually: start from a known-good release,
+// then swap to the newest one listed in the bucket (the listing is CORS-open).
+const OVERTURE = 'https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com'
+const overtureUrl = (release) => `pmtiles://${OVERTURE}/tiles/${release}/buildings.pmtiles`
+const latestOvertureUrl = () =>
+  fetch(`${OVERTURE}/?list-type=2&prefix=tiles/&delimiter=/`)
+    .then((r) => r.text())
+    .then((xml) => [...xml.matchAll(/<Prefix>tiles\/([^/<]+)\//g)].map((m) => m[1]).sort().pop())
+    .then((release) => (release ? overtureUrl(release) : null))
+    .catch(() => null)
+
 // Keyless tile providers (no {r} placeholder — MapLibre does not expand it).
 const TILES = {
   satellite: {
@@ -158,7 +169,7 @@ export default function BuildingsMap({
           draft: { type: 'geojson', data: EMPTY_FC }, // free-draw preview
           'overture-buildings': {
             type: 'vector',
-            url: 'pmtiles://https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com/tiles/2026-08-19.0/buildings.pmtiles'
+            url: overtureUrl('2026-10-21.0'),
           },
         },
         layers: [
@@ -232,6 +243,7 @@ export default function BuildingsMap({
 
     map.on('load', () => {
       loadedRef.current = true
+      latestOvertureUrl().then((url) => url && map.getSource('overture-buildings')?.setUrl(url))
       map.getSource('buildings')?.setData({ type: 'FeatureCollection', features: renderRef.current })
       map.getSource('shadows')?.setData({ type: 'FeatureCollection', features: shadowsRef.current })
       map.once('idle', fire)
