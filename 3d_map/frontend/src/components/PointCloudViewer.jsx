@@ -250,7 +250,7 @@ export default function PointCloudViewer() {
             parsing point cloud…
           </div>
         )}
-        <Canvas style={{ width:'100%', height:'100%' }} camera={{ position:[0, 5, 10], fov:50 }} gl={{ antialias:false }}>
+        <Canvas style={{ width:'100%', height:'100%' }} camera={{ position:[0, 5, 10], fov:50, near:1, far:100000 }} gl={{ antialias:false }}>
           <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
           {geometry && <FitCamera geometry={geometry} trigger={fitTrigger} />}
           {showAxes && <axesHelper args={[5]} />}
